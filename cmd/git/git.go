@@ -26,7 +26,7 @@ const (
 	// GitOpsCommand = "gitops.py"
 	GitOpsCommand = "gitops"
 	// GitOpsFailureFatal - is GitOpsCommand failure fatal?
-	GitOpsFailureFatal = false
+	GitOpsFailureFatal = true
 	// OrphanedCommitsCommand - command to list orphaned commits
 	OrphanedCommitsCommand = "detect-removed-commits.sh"
 	// OrphanedCommitsFailureFatal - is OrphanedCommitsCommand failure fatal?
