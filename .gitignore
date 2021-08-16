@@ -12,4 +12,30 @@
 *.out
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
+
+# VIM
+*.swp
+
+# Go binary
+/git
+
+# Others
+out
+xxx
+
+# golang output binary directory
+bin
+
+# ignore all go swagger generated files except the configuration one
+gen/restapi/*
+gen/models/*
+#!gen/restapi/configure_insights_datasource_git.go
+
+.env
+
+# Sensitive files
+*.dump
+*.token
+*.secret
+*.log
