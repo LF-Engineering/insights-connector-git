@@ -1,9 +1,9 @@
 ---
 swagger: '2.0'
 info:
-  title: RocketChat data source
+  title: git data source
   version: '1.0'
-  description: RocketChat data source V2
+  description: git data source V2
 paths:    # swagger forces me to add at least one path
   /noop:
     get:
@@ -17,22 +17,22 @@ definitions:
     properties:
       Slug:
         type: string
-        example: rocketchat
+        example: git
       Name:
         type: string
-        example: RocketChat
+        example: git
   MetaData:
     type: object
     properties:
       BackendName:
         type: string
-        example: insights-datasource-rocketchat
+        example: insights-datasource-git
       BackendVersion:
         type: string
         example: v0.1.0
       Project:
         type: string
-        example: Hyperledger Sawtooth
+        example: DevStats
       Tags:
         type: array
         items:
@@ -51,144 +51,178 @@ definitions:
       Username:
         type: string
         example: lgryglicki
+        description: but git doesn't have it, so it will be empty
       DataSourceId:
         type: string
-        example: rocketchat
+        example: git
         description: data source type slug (FK)
-  Channel:
+  CommitFileAction:
     type: object
     properties:
-      InternalId:
-        type: string
-        example: 1234567890abcdef
-        description: RocketChat internal chat channel ID
       Name:
         type: string
-        example: Channel name
-      Slug:
+        example: git.yaml
+      Action:
         type: string
-        description: RocketChat endpoint contain two values server URL and channel name, so we need to concatename them with space (not allowed in URL)
-        example: 'https://chat.hyperledger.org sawtooth'
-      Topic:
-        type: string
-        example: Channel topic
-      MemberCount:
+        example: a
+      Added:
         type: integer
-        description: this looks like a compute field - do we really need it? We can calculate this from RDS.
-        example: 10
-      MessageCount:
+        x-nullable: true
+        example: 6
+      Removed:
         type: integer
-        description: this looks like a compute field - do we really need it? We can calculate this from RDS.
-        example: 10
-      CreatedAt:
-        type: string
-        format: date-time
-        example: '2019-09-02 03:00:33.000000'
-      UpdatedAt:
-        type: string
-        format: date-time
-        description: this looks like a compute field - do we really need it? We can calculate this from RDS.
-        example: '2019-09-02 03:00:33.000000'
-  MessageReaction:
-    type: object
-    properties:
-      Type:
-        type: string
-        example: ok
-        description: literal reaction type
-      Emoji:
-        type: string
-        example: 😃
-        description: UNICODE emoji data
-      Author:
-        type: object
-        $ref: "#/definitions/Identity"
-  MessageActivity:
+        x-nullable: true
+        example: 4
+  CommitRole:
     type: object
     properties:
       Id:
         type: string
         example: 1234567890abcdef
         description: PK - up to 50 chars
-      MessageId:
+      Weight:
+        type: integer
+        description: this is by default 1, so if there is an author and a committer each role have 1/(1+1) = 50% of commit
+        example: 1
+      Name:
         type: string
-        example: 1234567890abcdef
-        description: FK - up to 50 chars
-      MessageInternalId:
-        type: string
-        example: 107625428
-        description: RocketChat message internal id - can be any string
-      ParentId:
-        type: string
-        x-nullable: true
-        example: 1234567890abcdef
-        description: parent message FK - up to 50 chars
-      ParentInternalId:
-        type: string
-        x-nullable: true
-        example: 107625428
-        description: RocketChat parent message internal id - can be any string
-      CreatedAt:
+        example: author, committer, signer, co-author, tester, approver, reviewer, reporter, informer, resolver, influencer
+      When:
         type: string
         format: date-time
-        example: '2019-09-02 03:00:33.000000'
-      ActivityType:
+      WhenInTz:
         type: string
-        example: rocketchat_message_created, rocketchat_message_edited, rocketchat_message_reaction, rocketchat_message_mention, rocketchat_attachment_added, rocketchat_attachment_edited
-        description: allows reconstructing relations
-      Body:
-        type: string
-        description: message, reply, body, file name
-        example: My comment body
-        x-nullable: true
-      Identity:
+        format: date-time
+      WhenTz:
+        type: number
+        example: -2.5
+      User:
         type: object
-        description: activity creator (ProjectDataSourceIdentity)
         $ref: "#/definitions/Identity"
-      Reaction:
-        type: object
-        x-nullable: true
-        $ref: "#/definitions/MessageReaction"
-  Message:
+  CommitStats:
+    type: object
+    properties:
+      LinesAdded:
+        type: integer
+        example: 10
+      LinesRemoved:
+        type: integer
+        example: 5
+      LinesChanged:
+        type: integer
+        example: 15
+  Commit:
     type: object
     properties:
       Id:
         type: string
         example: 1234567890abcdef
         description: PK - up to 50 chars
-      InternalId:
+      SHA:
         type: string
-        example: 107625428
-        description: RocketChat internal id - can be any string
-      CreatedAt:
+        example: 2b20505d9d60202c6779342033d344dba0685d1b
+      HashShort:
         type: string
-        format: date-time
-      URLs:
+        example: 2b20505d9d60202c6779342033d344dba0685d1b
+      RepositoryURL:
+        type: string
+        example: https://github.com/cncf/devstats
+      Message:
+        type: string
+        x-nullable: true
+        example: my commit body
+      Title:
+        type: string
+        x-nullable: true
+        example: fix-the-bug
+      CommitURL:
+        type: string
+        example: https://github.com/cncf/devstats/commit/2a667b1d4c3462300382eba80ae89bf8e9dc0e5c
+      RepositoryShortURL:
+        type: string
+        example: devstats
+      RepositoryType:
+        type: string
+        example: github, gerrit, gitlab, bitbucket
+      IsSquashed:
+        type: boolean
+        example: true
+      IsDoc:
+        type: boolean
+        example: true
+      IsMerge:
+        type: boolean
+        example: true
+      IsEmpty:
+        type: boolean
+        example: true
+      Parents:
         type: array
         items:
           type: string
-          example: https://msg-url
-      Type:
-        type: string
-        example: ok
-        description: can be message, attachment
-      Channel:
+          description: commit parents SHAs
+          example: 2b20505d9d60202c6779342033d344dba0685d1b
+      Stats:
         type: object
-        $ref: "#/definitions/Channel"
-      Activities:
+        $ref: "#/definitions/CommitStats"
+      Files:
         type: array
         items:
-          $ref: "#/definitions/MessageActivity"
+          $ref: "#/definitions/CommitFileAction"
+      Roles:
+        type: array
+        items:
+          $ref: "#/definitions/CommitRole"
+  LanguageStats:
+    type: object
+    properties:
+      Language:
+        type: string
+        example: golang
+      CalculatedAt:
+        type: string
+        format: date-time
+      Files:
+        type: integer
+        example: 6
+      Blank:
+        type: integer
+        example: 10
+      Comment:
+        type: integer
+        example: 15
+      Code:
+        type: integer
+        example: 260
+  RepositoryStats:
+    type: object
+    properties:
+      RepositoryURL:
+        type: string
+        example: https://github.com/cncf/devstats
+      CalculatedAt:
+        type: string
+        format: date-time
+      TotalLinesOfCode:
+        type: integer
+        example: 65535
+      ProgrammingLanguagesStats:
+        type: array
+        items:
+          $ref: "#/definitions/LanguageStats"
   Event:
     type: object
-    description: single event in RocketChat is a message, it contains neted activities for that message
+    description: single event in git is a commit, it commit trailers/roles (at least author & committer), stats are per repo (programming language summary and LOC SUMMARY)
     properties:
-      Message:
+      Commit:
         type: object
-        $ref: "#/definitions/Message"
+        $ref: "#/definitions/Commit"
+      RepositoryStats:
+        type: object
+        $ref: "#/definitions/RepositoryStats"
   Data:
     type: object
-    description: this is the final output of insights-datasource-rocketchat, data source will output packs up to some fixed size, like 500 events pack at once
+    description: this is the final output of insights-datasource-git, data source will output packs up to some fixed size, like 500 events pack at once
     properties:
       DataSource:
         type: object
@@ -197,15 +231,9 @@ definitions:
         type: object
         $ref: "#/definitions/MetaData"
       Endpoint:
-        type: object
-        description: RocketChat endpoint for which data is being sent
-        properties:
-          RocketChatServer:
-            type: string
-            example: https://chat.hyperledger.org
-          RocketChatChannel:
-            type: string
-            example: sawtooth
+        type: string
+        description: git endpoint for which data is being sent
+        example: https://github.com/cncf/devstats
       Events:
         type: array
         items:
