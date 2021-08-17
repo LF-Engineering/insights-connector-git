@@ -36,8 +36,6 @@ const (
 	OrphanedCommitsCommand = "detect-removed-commits.sh"
 	// OrphanedCommitsFailureFatal - is OrphanedCommitsCommand failure fatal?
 	OrphanedCommitsFailureFatal = true
-	// GitOpsNoCleanup - if set, it will skip gitops repo cleanup
-	GitOpsNoCleanup = false
 	// GitParseStateInit - init parser state
 	GitParseStateInit = 0
 	// GitParseStateCommit - commit parser state
@@ -501,13 +499,15 @@ type PLS struct {
 
 // DSGit - DS implementation for git
 type DSGit struct {
-	URL       string // git repo URL, for example https://github.com/cncf/devstats
-	ReposPath string // path to store git repo clones, defaults to /tmp/git-repositories
-	CachePath string // path to store gitops results cache, defaults to /tmp/git-cache
+	URL              string // git repo URL, for example https://github.com/cncf/devstats
+	ReposPath        string // path to store git repo clones, defaults to /tmp/git-repositories
+	CachePath        string // path to store gitops results cache, defaults to /tmp/git-cache
+	SkipCacheCleanup bool   // skip gitops cache cleanup
 	// Flags
-	FlagURL       *string
-	FlagReposPath *string
-	FlagCachePath *string
+	FlagURL              *string
+	FlagReposPath        *string
+	FlagCachePath        *string
+	FlagSkipCacheCleanup *bool
 	// Non-config variables
 	RepoName        string                            // repo name
 	Loc             int                               // lines of code as reported by GitOpsCommand
@@ -531,6 +531,7 @@ func (j *DSGit) AddFlags() {
 	j.FlagURL = flag.String("git-url", "", "git repo URL, for example https://github.com/cncf/devstats")
 	j.FlagReposPath = flag.String("git-repos-path", GitDefaultReposPath, "path to store git repo clones, defaults to "+GitDefaultReposPath)
 	j.FlagCachePath = flag.String("git-cache-path", GitDefaultCachePath, "path to store gitops results cache, defaults to"+GitDefaultCachePath)
+	j.FlagSkipCacheCleanup = flag.Bool("git-skip-cache-cleanup", false, "skip gitops cache cleanup")
 }
 
 // ParseArgs - parse git specific environment variables
@@ -559,6 +560,15 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	}
 	if ctx.EnvSet("CACHE_PATH") {
 		j.CachePath = ctx.Env("CACHE_PATH")
+	}
+
+	// git skip cache cleanup
+	if shared.FlagPassed(ctx, "skip-cache-cleanup") {
+		j.SkipCacheCleanup = *j.FlagSkipCacheCleanup
+	}
+	skipCacheCleanup, present := ctx.BoolEnvSet("SKIP_CACHE_CLEANUP")
+	if present {
+		j.SkipCacheCleanup = skipCacheCleanup
 	}
 
 	// NOTE: We enable pair programming by default
@@ -621,6 +631,8 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	// FIXME
 	jsonBytes, _ := jsoniter.Marshal(item)
 	shared.Printf("EnrichItem: %s\n", string(jsonBytes))
+	// FIXME
+	rich = make(map[string]interface{})
 	// NOTE: From shared
 	rich["metadata__enriched_on"] = time.Now()
 	// rich[ProjectSlug] = ctx.ProjectSlug
@@ -743,9 +755,12 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 			serr string
 		)
 		cmdLine := []string{GitOpsCommand, url}
-		var env map[string]string
-		if GitOpsNoCleanup {
-			env = map[string]string{"SKIP_CLEANUP": "1"}
+		env := map[string]string{
+			"DA_GIT_REPOS_PATH": j.ReposPath,
+			"DA_GIT_CACHE_PATH": j.CachePath,
+		}
+		if j.SkipCacheCleanup {
+			env["SKIP_CLEANUP"] = "1"
 		}
 		sout, serr, e = shared.ExecCommand(ctx, cmdLine, "", env)
 		if e != nil {
@@ -1345,13 +1360,19 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			return
 		}
 		for _, rich := range richItems {
-			mtx.Lock()
+			if thrN > 1 {
+				mtx.Lock()
+			}
 			e = j.EnrichPairProgrammingItem(rich.(map[string]interface{}))
 			if e != nil {
-				mtx.Unlock()
+				if thrN > 1 {
+					mtx.Unlock()
+				}
 				return
 			}
-			mtx.Unlock()
+			if thrN > 1 {
+				mtx.Unlock()
+			}
 		}
 		if thrN > 1 {
 			mtx.Lock()
@@ -1812,6 +1833,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	locFinished := false
 	waitForLOC := func() (e error) {
 		if thrN == 1 {
+			locFinished = true
 			return
 		}
 		waitLOCMtx.Lock()
@@ -1996,7 +2018,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			}
 		}()
 	}
-	if thrN > 0 {
+	if thrN > 1 {
 		err = <-occh
 	}
 	// NOTE: Non-generic ends here
