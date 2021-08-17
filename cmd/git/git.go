@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -618,6 +619,8 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 // EnrichItem - return rich item from raw item for a given author type
 func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich map[string]interface{}, err error) {
 	// FIXME
+	jsonBytes, _ := jsoniter.Marshal(item)
+	shared.Printf("EnrichItem: %s\n", string(jsonBytes))
 	// NOTE: From shared
 	rich["metadata__enriched_on"] = time.Now()
 	// rich[ProjectSlug] = ctx.ProjectSlug
@@ -691,7 +694,7 @@ func (j *DSGit) ItemUpdatedOn(item interface{}) time.Time {
 	}
 	updated, _, _, ok := shared.ParseDateWithTz(sUpdated)
 	if !ok {
-		shared.Fatalf("git: %s: ItemUpdatedOn() - cannot extract %s from %s", GitCommitDateField, sUpdated)
+		shared.Fatalf("git: ItemUpdatedOn() - cannot extract %s from %s", GitCommitDateField, sUpdated)
 	}
 	return updated
 }
@@ -1391,6 +1394,357 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 		if err != nil {
 			return
 		}
+	}
+	return
+}
+
+// ParseCommit - parse commit
+func (j *DSGit) ParseCommit(ctx *shared.Ctx, line string) (parsed bool, err error) {
+	m := shared.MatchGroups(GitCommitPattern, line)
+	if len(m) == 0 {
+		err = fmt.Errorf("expecting commit on line %d: '%s'", j.CurrLine, line)
+		return
+	}
+	parentsAry := []string{}
+	refsAry := []string{}
+	parents, parentsPresent := m["parents"]
+	if parentsPresent && parents != "" {
+		parentsAry = strings.Split(strings.TrimSpace(parents), " ")
+	}
+	refs, refsPresent := m["refs"]
+	if refsPresent && refs != "" {
+		ary := strings.Split(strings.TrimSpace(refs), ",")
+		for _, ref := range ary {
+			ref = strings.TrimSpace(ref)
+			if ref != "" {
+				refsAry = append(refsAry, ref)
+			}
+		}
+	}
+	j.Commit = make(map[string]interface{})
+	j.Commit["commit"] = m["commit"]
+	j.Commit["parents"] = parentsAry
+	j.Commit["refs"] = refsAry
+	j.CommitFiles = make(map[string]map[string]interface{})
+	j.ParseState = GitParseStateHeader
+	parsed = true
+	return
+}
+
+// ExtractPrevFileName - extracts previous file name (before rename/move etc.)
+func (*DSGit) ExtractPrevFileName(f string) (res string) {
+	i := strings.Index(f, "{")
+	j := strings.Index(f, "}")
+	if i > -1 && j > -1 {
+		k := shared.IndexAt(f, " => ", i)
+		if k > -1 {
+			prefix := f[:i]
+			inner := f[i+1 : k]
+			suffix := f[j+1:]
+			res = prefix + inner + suffix
+		}
+	} else if strings.Index(f, " => ") > -1 {
+		res = strings.Split(f, " => ")[0]
+	} else {
+		res = f
+	}
+	return
+}
+
+// BuildCommit - return commit structure from the current parsed object
+func (j *DSGit) BuildCommit(ctx *shared.Ctx) (commit map[string]interface{}) {
+	if ctx.Debug > 2 {
+		defer func() {
+			shared.Printf("built commit %+v\n", commit)
+		}()
+	}
+	commit = j.Commit
+	ks := []string{}
+	for k, v := range commit {
+		if v == nil {
+			ks = append(ks, k)
+		}
+	}
+	for _, k := range ks {
+		delete(commit, k)
+	}
+	files := []map[string]interface{}{}
+	sf := []string{}
+	doc := false
+	for f := range j.CommitFiles {
+		sf = append(sf, f)
+		if GitDocFilePattern.MatchString(f) {
+			doc = true
+		}
+	}
+	sort.Strings(sf)
+	for _, f := range sf {
+		d := j.CommitFiles[f]
+		ks = []string{}
+		for k, v := range d {
+			if v == nil {
+				ks = append(ks, k)
+			}
+		}
+		for _, k := range ks {
+			delete(d, k)
+		}
+		files = append(files, d)
+	}
+	commit["files"] = files
+	commit["doc_commit"] = doc
+	j.Commit = nil
+	j.CommitFiles = nil
+	return
+}
+
+// ParseStats - parse stats line
+func (j *DSGit) ParseStats(ctx *shared.Ctx, data map[string]string) {
+	fileName := j.ExtractPrevFileName(data["file"])
+	_, ok := j.CommitFiles[fileName]
+	if !ok {
+		j.CommitFiles[fileName] = make(map[string]interface{})
+		j.CommitFiles[fileName]["file"] = fileName
+	}
+	added, _ := strconv.Atoi(data["added"])
+	removed, _ := strconv.Atoi(data["removed"])
+	j.CommitFiles[fileName]["added"] = added
+	j.CommitFiles[fileName]["removed"] = removed
+}
+
+// ParseFile - parse file state
+func (j *DSGit) ParseFile(ctx *shared.Ctx, line string) (parsed, empty bool, err error) {
+	if line == "" {
+		j.ParseState = GitParseStateCommit
+		parsed = true
+		return
+	}
+	m := shared.MatchGroups(GitActionPattern, line)
+	if len(m) > 0 {
+		j.ParseAction(ctx, m)
+		parsed = true
+		return
+	}
+	m = shared.MatchGroups(GitStatsPattern, line)
+	if len(m) > 0 {
+		j.ParseStats(ctx, m)
+		parsed = true
+		return
+	}
+	m = shared.MatchGroups(GitCommitPattern, line)
+	if len(m) > 0 {
+		empty = true
+	} else if ctx.Debug > 1 {
+		shared.Printf("invalid file section format, line %d: '%s'\n", j.CurrLine, line)
+	}
+	j.ParseState = GitParseStateCommit
+	return
+}
+
+// ParseHeader - parse header state
+func (j *DSGit) ParseHeader(ctx *shared.Ctx, line string) (parsed bool, err error) {
+	if line == "" {
+		j.ParseState = GitParseStateMessage
+		parsed = true
+		return
+	}
+	m := shared.MatchGroups(GitHeaderPattern, line)
+	if len(m) == 0 {
+		err = fmt.Errorf("invalid header format, line %d: '%s'", j.CurrLine, line)
+		return
+	}
+	// Not too many properties, ES has 1000 fields limit, and each commit can have
+	// different properties, so value around 300 should(?) be safe
+	if len(j.Commit) < GitMaxCommitProperties {
+		if m["name"] != "" {
+			j.Commit[m["name"]] = m["value"]
+		}
+	}
+	parsed = true
+	return
+}
+
+// ParseMessage - parse message state
+func (j *DSGit) ParseMessage(ctx *shared.Ctx, line string) (parsed bool, err error) {
+	if line == "" {
+		j.ParseState = GitParseStateFile
+		parsed = true
+		return
+	}
+	m := shared.MatchGroups(GitMessagePattern, line)
+	if len(m) == 0 {
+		if ctx.Debug > 1 {
+			shared.Printf("invalid message format, line %d: '%s'", j.CurrLine, line)
+		}
+		j.ParseState = GitParseStateFile
+		return
+	}
+	msg := m["msg"]
+	currMsg, ok := j.Commit["message"]
+	if ok {
+		sMsg, _ := currMsg.(string)
+		j.Commit["message"] = sMsg + "\n" + msg
+	} else {
+		j.Commit["message"] = msg
+	}
+	j.ParseTrailer(ctx, msg)
+	parsed = true
+	return
+}
+
+// ParseAction - parse action line
+func (j *DSGit) ParseAction(ctx *shared.Ctx, data map[string]string) {
+	var (
+		modesAry   []string
+		indexesAry []string
+	)
+	modes, modesPresent := data["modes"]
+	if modesPresent && modes != "" {
+		modesAry = strings.Split(strings.TrimSpace(modes), " ")
+	}
+	indexes, indexesPresent := data["indexes"]
+	if indexesPresent && indexes != "" {
+		indexesAry = strings.Split(strings.TrimSpace(indexes), " ")
+	}
+	fileName := data["file"]
+	_, ok := j.CommitFiles[fileName]
+	if !ok {
+		j.CommitFiles[fileName] = make(map[string]interface{})
+	}
+	j.CommitFiles[fileName]["modes"] = modesAry
+	j.CommitFiles[fileName]["indexes"] = indexesAry
+	j.CommitFiles[fileName]["action"] = data["action"]
+	j.CommitFiles[fileName]["file"] = fileName
+	j.CommitFiles[fileName]["newfile"] = data["newfile"]
+}
+
+// ParseTrailer - parse possible trailer line
+func (j *DSGit) ParseTrailer(ctx *shared.Ctx, line string) {
+	m := shared.MatchGroups(GitTrailerPattern, line)
+	if len(m) == 0 {
+		return
+	}
+	oTrailer := m["name"]
+	lTrailer := strings.ToLower(oTrailer)
+	trailers, ok := GitAllowedTrailers[lTrailer]
+	if !ok {
+		if ctx.Debug > 1 {
+			shared.Printf("Trailer %s/%s not in the allowed list %v, skipping\n", oTrailer, lTrailer, GitAllowedTrailers)
+		}
+		return
+	}
+	for _, trailer := range trailers {
+		ary, ok := j.Commit[trailer]
+		if ok {
+			if ctx.Debug > 1 {
+				shared.Printf("trailer %s -> %s found in '%s'\n", oTrailer, trailer, line)
+			}
+			// Trailer can be the same as header value, we still want to have it - with "-Trailer" prefix added
+			_, ok = ary.(string)
+			if ok {
+				trailer += "-Trailer"
+				ary2, ok2 := j.Commit[trailer]
+				if ok2 {
+					if ctx.Debug > 1 {
+						shared.Printf("renamed trailer %s -> %s found in '%s'\n", oTrailer, trailer, line)
+					}
+					j.Commit[trailer] = append(ary2.([]interface{}), m["value"])
+				} else {
+					if ctx.Debug > 1 {
+						shared.Printf("added renamed trailer %s\n", trailer)
+					}
+					j.Commit[trailer] = []interface{}{m["value"]}
+				}
+			} else {
+				j.Commit[trailer] = shared.UniqueStringArray(append(ary.([]interface{}), m["value"]))
+				if ctx.Debug > 1 {
+					shared.Printf("appended trailer %s -> %s found in '%s'\n", oTrailer, trailer, line)
+				}
+			}
+		} else {
+			j.Commit[trailer] = []interface{}{m["value"]}
+		}
+	}
+}
+
+// ParseInit - parse initial state
+func (j *DSGit) ParseInit(ctx *shared.Ctx, line string) (parsed bool, err error) {
+	j.ParseState = GitParseStateCommit
+	parsed = line == ""
+	return
+}
+
+// HandleRecentLines - keep last 30 lines, so we can show them on parser error
+func (j *DSGit) HandleRecentLines(line string) {
+	j.RecentLines = append(j.RecentLines, line)
+	l := len(j.RecentLines)
+	if l > 30 {
+		j.RecentLines = j.RecentLines[1:]
+	}
+}
+
+// ParseNextCommit - parse next git log commit or report end
+func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{}, ok bool, err error) {
+	for j.LineScanner.Scan() {
+		j.CurrLine++
+		line := strings.TrimRight(j.LineScanner.Text(), "\n")
+		if ctx.Debug > 2 {
+			j.HandleRecentLines(line)
+		}
+		if ctx.Debug > 2 {
+			shared.Printf("line %d: '%s'\n", j.CurrLine, line)
+		}
+		var (
+			parsed bool
+			empty  bool
+			state  string
+		)
+		for {
+			if ctx.Debug > 2 {
+				state = fmt.Sprintf("%v", j.ParseState)
+			}
+			switch j.ParseState {
+			case GitParseStateInit:
+				parsed, err = j.ParseInit(ctx, line)
+			case GitParseStateCommit:
+				parsed, err = j.ParseCommit(ctx, line)
+			case GitParseStateHeader:
+				parsed, err = j.ParseHeader(ctx, line)
+			case GitParseStateMessage:
+				parsed, err = j.ParseMessage(ctx, line)
+			case GitParseStateFile:
+				parsed, empty, err = j.ParseFile(ctx, line)
+			default:
+				err = fmt.Errorf("unknown parse state:%d", j.ParseState)
+			}
+			if ctx.Debug > 2 {
+				state += fmt.Sprintf(" -> (%v,%v,%v)", j.ParseState, parsed, err)
+				shared.Printf("%s\n", state)
+			}
+			if err != nil {
+				shared.Printf("parse next line '%s' error: %v\n", line, err)
+				return
+			}
+			if j.ParseState == GitParseStateCommit && j.Commit != nil {
+				commit = j.BuildCommit(ctx)
+				if empty {
+					parsed, err = j.ParseCommit(ctx, line)
+					if !parsed || err != nil {
+						shared.Printf("failed to parse commit after empty file section\n")
+						return
+					}
+				}
+				ok = true
+				return
+			}
+			if parsed {
+				break
+			}
+		}
+	}
+	if j.Commit != nil {
+		commit = j.BuildCommit(ctx)
+		ok = true
 	}
 	return
 }
