@@ -942,8 +942,6 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		committersMap = map[string]struct{}{}
 	}
 	othersMap := j.GetOtherTrailersAuthors(ctx, item)
-	// FIXME: richOthersMap
-	fmt.Printf("authorsMap: %+v, committersMap: %+v, richOthersMap: %+v\n", authorsMap, committersMap, othersMap)
 	idents := [][3]string{}
 	identTypes := []string{}
 	otherIdents := map[string][3]string{}
@@ -979,22 +977,10 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	}
 	rich["idents"] = idents
 	rich["ident_types"] = identTypes
-	// FIXME
-	fmt.Printf("identTypes: %+v, idents: %+v\n", identTypes, idents)
-	/*
-		if j.PairProgramming {
-			err = j.PairProgrammingMetrics(ctx, rich, commit)
-			if err != nil {
-				Printf("error calculating pair programming metrics: %+v\n", err)
-				return
-			}
-		}
-		rich["origin"] = shared.AnonymizeURL(rich["origin"].(string))
-		rich["tag"] = shared.AnonymizeURL(rich["tag"].(string))
-		rich["commit_url"] = shared.AnonymizeURL(rich["commit_url"].(string))
-		rich["git_author_domain"] = rich["author_domain"]
-		rich["type"] = Commit
-	*/
+	rich["origin"] = shared.AnonymizeURL(rich["origin"].(string))
+	rich["tags"] = ctx.Tags
+	rich["commit_url"] = shared.AnonymizeURL(rich["commit_url"].(string))
+	rich["type"] = "commit"
 	// NOTE: From shared
 	rich["metadata__enriched_on"] = time.Now()
 	// rich[ProjectSlug] = ctx.ProjectSlug
@@ -1037,9 +1023,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 		doc, _ := iDoc.(map[string]interface{})
 		// Event
 		// FIXME
-		if 1 == 0 {
-			shared.Printf("%s: %+v\n", source, doc)
-		}
+		shared.Printf("%s: %+v\n", source, doc)
 		var updatedOn time.Time
 		event := &models.Event{}
 		data.Events = append(data.Events, event)
@@ -1415,54 +1399,6 @@ func (j *DSGit) GetOtherPPAuthors(ctx *shared.Ctx, doc interface{}) (othersMap m
 	return
 }
 
-// TrailerDocs - return flat trailer docs for already generated rich item
-func (j *DSGit) TrailerDocs(ctx *shared.Ctx, rich map[string]interface{}) (trailers []map[string]interface{}, err error) {
-	// "Signed-off-by":  {"authors_signed", "signer"},
-	var (
-		trailer map[string]interface{}
-		skip    bool
-	)
-	for _, data := range GitTrailerOtherAuthors {
-		aryName := data[0]
-		authorName := data[1]
-		iAry, ok := rich[aryName]
-		// FIXME:
-		fmt.Printf("TrailerDocs: (%s,%s,%+v,%v)\n", aryName, authorName, iAry, ok)
-		if ok {
-			ary, _ := iAry.([]interface{})
-			for _, iItem := range ary {
-				trailer, skip, err = j.TrailerDoc(ctx, rich, iItem.(map[string]interface{}), authorName)
-				if err != nil {
-					return
-				}
-				if skip {
-					continue
-				}
-				trailers = append(trailers, trailer)
-			}
-		}
-	}
-	return
-}
-
-// TrailerDoc - return flat trailer doc for already generated rich item's nested trailer
-func (j *DSGit) TrailerDoc(ctx *shared.Ctx, rich, item map[string]interface{}, author string) (trailer map[string]interface{}, skip bool, err error) {
-	trailer = make(map[string]interface{})
-	authorID, ok := item[author+"_id"].(string)
-	if !ok {
-		if ctx.Debug > 0 {
-			shared.Printf("cannot extract %s from %+v", author+"_id", shared.DumpKeys(item))
-		}
-		skip = true
-		return
-	}
-	trailer["type"] = author
-	trailer["author_id"] = authorID
-	// FIXME:
-	fmt.Printf("%s trailer: rich=%+v item=%+v\n", author, rich, item)
-	return
-}
-
 // GitEnrichItems - iterate items and enrich them
 // items is a current pack of input items
 // docs is a pointer to where extracted identities will be stored
@@ -1500,10 +1436,10 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 		mtx = &sync.RWMutex{}
 		ch = make(chan error)
 	}
-	var getRichItems func(map[string]interface{}) ([]interface{}, error)
+	var getRichItem func(map[string]interface{}) (interface{}, error)
 	if j.PairProgramming {
 		// PP
-		getRichItems = func(doc map[string]interface{}) (richItems []interface{}, e error) {
+		getRichItem = func(doc map[string]interface{}) (rich interface{}, e error) {
 			idata, _ := shared.Dig(doc, []string{"data"}, true, false)
 			data, _ := idata.(map[string]interface{})
 			data["Author-Original"] = data["Author"]
@@ -1518,43 +1454,13 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				data["Commit-Original"] = data["Commit"]
 				data["Commit"] = firstCommitter
 			}
-			var (
-				rich        map[string]interface{}
-				trailerDocs []map[string]interface{}
-			)
 			rich, e = j.EnrichItem(ctx, doc)
-			if e != nil {
-				return
-			}
-			if GitGenerateFlatDocs {
-				trailerDocs, e = j.TrailerDocs(ctx, rich)
-				if e != nil {
-					return
-				}
-				rich["trailers"] = trailerDocs
-			}
-			richItems = append(richItems, rich)
 			return
 		}
 	} else {
 		// Non PP
-		getRichItems = func(doc map[string]interface{}) (richItems []interface{}, e error) {
-			var (
-				rich        map[string]interface{}
-				trailerDocs []map[string]interface{}
-			)
+		getRichItem = func(doc map[string]interface{}) (rich interface{}, e error) {
 			rich, e = j.EnrichItem(ctx, doc)
-			if e != nil {
-				return
-			}
-			if GitGenerateFlatDocs {
-				trailerDocs, e = j.TrailerDocs(ctx, rich)
-				if e != nil {
-					return
-				}
-				rich["trailers"] = trailerDocs
-			}
-			richItems = append(richItems, rich)
 			return
 		}
 	}
@@ -1578,29 +1484,27 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			e = fmt.Errorf("Failed to parse document %+v", doc)
 			return
 		}
-		richItems, e := getRichItems(doc)
+		rich, e := getRichItem(doc)
 		if e != nil {
 			return
-		}
-		for _, rich := range richItems {
-			if thrN > 1 {
-				mtx.Lock()
-			}
-			e = j.SetParentCommitFlag(rich.(map[string]interface{}))
-			if e != nil {
-				if thrN > 1 {
-					mtx.Unlock()
-				}
-				return
-			}
-			if thrN > 1 {
-				mtx.Unlock()
-			}
 		}
 		if thrN > 1 {
 			mtx.Lock()
 		}
-		*docs = append(*docs, richItems...)
+		e = j.SetParentCommitFlag(rich.(map[string]interface{}))
+		if e != nil {
+			if thrN > 1 {
+				mtx.Unlock()
+			}
+			return
+		}
+		if thrN > 1 {
+			mtx.Unlock()
+		}
+		if thrN > 1 {
+			mtx.Lock()
+		}
+		*docs = append(*docs, rich)
 		// NOTE: flush here
 		if len(*docs) >= ctx.PackSize {
 			outputDocs()
