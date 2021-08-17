@@ -55,6 +55,8 @@ const (
 	GitHubURL = "https://github.com/"
 	// GitMaxCommitProperties - maximum properties that can be set on the commit object
 	GitMaxCommitProperties = 1000
+	// GitGenerateFlatDocs - do we want to generate flat commit co-authors docs, like docs with type: commit_co_author, commit_signer etc.?
+	GitGenerateFlatDocs = true
 )
 
 var (
@@ -468,8 +470,8 @@ var (
 		"Resolved-by":    true,
 		"Influenced-by":  true,
 	}
-	// CommitsHash is a map of commit hashes for each repo
-	CommitsHash = make(map[string]map[string]struct{})
+	// GitTrailerPPAuthors - trailer name to authors map (for pair programming)
+	GitTrailerPPAuthors = map[string]string{"Signed-off-by": "authors_signed_off", "Co-authored-by": "co_authors"}
 	// max upstream date
 	gMaxUpstreamDt    time.Time
 	gMaxUpstreamDtMtx = &sync.Mutex{}
@@ -517,6 +519,10 @@ type DSGit struct {
 	CommitFiles     map[string]map[string]interface{} // current commit's files
 	RecentLines     []string                          // recent commit lines
 	OrphanedCommits []string                          // orphaned commits SHAs
+	// PairProgramming mode
+	PairProgramming bool
+	// CommitsHash is a map of commit hashes for each repo
+	CommitsHash map[string]map[string]struct{}
 }
 
 // AddFlags - add git specific flags
@@ -553,6 +559,11 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	if ctx.EnvSet("CACHE_PATH") {
 		j.CachePath = ctx.Env("CACHE_PATH")
 	}
+
+	// NOTE: We enable pair programming by default
+	j.PairProgramming = true
+
+	j.CommitsHash = make(map[string]map[string]struct{})
 
 	// NOTE: don't forget this
 	gGitMetaData.Project = ctx.Project
@@ -611,6 +622,29 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	rich["metadata__enriched_on"] = time.Now()
 	// rich[ProjectSlug] = ctx.ProjectSlug
 	// rich["groups"] = ctx.Groups
+	return
+}
+
+// EnrichPairProgrammingItem - additional operations on already enriched item for pair programming
+func (j *DSGit) EnrichPairProgrammingItem(richItem map[string]interface{}) (err error) {
+	var repoString string
+	if repo, ok := richItem["repo_name"]; ok {
+		repoString = fmt.Sprintf("%+v", repo)
+		if commit, ok := richItem["hash"]; ok {
+			commitString := fmt.Sprintf("%+v", commit)
+			if innerMap := j.CommitsHash[repoString]; innerMap == nil {
+				j.CommitsHash[repoString] = make(map[string]struct{})
+			}
+
+			if _, ok := j.CommitsHash[repoString][commitString]; ok {
+				// do nothing because the hash exists in the commits map
+				richItem["is_parent_commit"] = 0
+				return
+			}
+			j.CommitsHash[repoString][commitString] = struct{}{}
+			richItem["is_parent_commit"] = 1
+		}
+	}
 	return
 }
 
@@ -893,6 +927,474 @@ func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 	return
 }
 
+// GetAuthors - parse multiple authors used in pair programming mode
+func (j *DSGit) GetAuthors(ctx *shared.Ctx, m map[string]string, n map[string][]string) (authors map[string]struct{}, author string) {
+	if ctx.Debug > 1 {
+		defer func() {
+			shared.Printf("GetAuthors(%+v,%+v) -> %+v,%s\n", m, n, authors, author)
+		}()
+	}
+	if len(m) > 0 {
+		authors = make(map[string]struct{})
+		email := strings.TrimSpace(m["email"])
+		if !strings.Contains(email, "<") || !strings.Contains(email, "@") || !strings.Contains(email, ">") {
+			email = ""
+		}
+		for _, auth := range strings.Split(m["first_authors"], ",") {
+			auth = strings.TrimSpace(auth)
+			if email != "" && (!strings.Contains(auth, "<") || !strings.Contains(auth, "@") || !strings.Contains(auth, ">")) {
+				auth += " " + email
+			}
+			authors[auth] = struct{}{}
+			if author == "" {
+				author = auth
+			}
+		}
+		auth := strings.TrimSpace(m["last_author"])
+		if email != "" && (!strings.Contains(auth, "<") || !strings.Contains(auth, "@") || !strings.Contains(auth, ">")) {
+			auth += " " + email
+		}
+		authors[auth] = struct{}{}
+		if author == "" {
+			author = auth
+		}
+	}
+	if len(n) > 0 {
+		if authors == nil {
+			authors = make(map[string]struct{})
+		}
+		nEmails := len(n["email"])
+		for i, auth := range n["first_authors"] {
+			email := ""
+			if i < nEmails {
+				email = strings.TrimSpace(n["email"][i])
+				if !strings.Contains(email, "@") {
+					email = ""
+				}
+			}
+			auth = strings.TrimSpace(auth)
+			if email != "" && !strings.Contains(auth, "@") {
+				auth += " <" + email + ">"
+			}
+			authors[auth] = struct{}{}
+			if author == "" {
+				author = auth
+			}
+		}
+	}
+	return
+}
+
+// GetAuthorsData - extract authors data from a given field (this supports pair programming)
+func (j *DSGit) GetAuthorsData(ctx *shared.Ctx, doc interface{}, auth string) (authorsMap map[string]struct{}, firstAuthor string) {
+	iauthors, ok := shared.Dig(doc, []string{"data", auth}, false, true)
+	if ok {
+		authors, _ := iauthors.(string)
+		if j.PairProgramming {
+			if ctx.Debug > 1 {
+				shared.Printf("pp %s: %s\n", auth, authors)
+			}
+			m1 := shared.MatchGroups(GitAuthorsPattern, authors)
+			m2 := shared.MatchGroupsArray(GitCoAuthorsPattern, authors)
+			if len(m1) > 0 || len(m2) > 0 {
+				authorsMap, firstAuthor = j.GetAuthors(ctx, m1, m2)
+			}
+		}
+		if len(authorsMap) == 0 {
+			authorsMap = map[string]struct{}{authors: {}}
+			firstAuthor = authors
+		}
+	}
+	return
+}
+
+// GetOtherPPAuthors - get others authors - possible from fields: Signed-off-by and/or Co-authored-by
+func (j *DSGit) GetOtherPPAuthors(ctx *shared.Ctx, doc interface{}) (othersMap map[string]map[string]struct{}) {
+	for otherKey := range GitTrailerPPAuthors {
+		iothers, ok := shared.Dig(doc, []string{"data", otherKey}, false, true)
+		if ok {
+			others, _ := iothers.([]interface{})
+			if ctx.Debug > 1 {
+				shared.Printf("pp %s: %s\n", otherKey, others)
+			}
+			if othersMap == nil {
+				othersMap = make(map[string]map[string]struct{})
+			}
+			for _, iOther := range others {
+				other := strings.TrimSpace(iOther.(string))
+				_, ok := othersMap[other]
+				if !ok {
+					othersMap[other] = map[string]struct{}{}
+				}
+				othersMap[other][otherKey] = struct{}{}
+			}
+		}
+	}
+	return
+}
+
+// TrailerDocs - return flat trailer docs for already generated rich item
+func (j *DSGit) TrailerDocs(ctx *shared.Ctx, rich map[string]interface{}) (trailers []map[string]interface{}, err error) {
+	// "Signed-off-by":  {"authors_signed", "signer"},
+	var (
+		trailer map[string]interface{}
+		skip    bool
+	)
+	for _, data := range GitTrailerOtherAuthors {
+		aryName := data[0]
+		authorName := data[1]
+		iAry, ok := rich[aryName]
+		if ok {
+			ary, _ := iAry.([]interface{})
+			for _, iItem := range ary {
+				trailer, skip, err = j.TrailerDoc(ctx, rich, iItem.(map[string]interface{}), authorName)
+				if err != nil {
+					return
+				}
+				if skip {
+					continue
+				}
+				trailers = append(trailers, trailer)
+			}
+		}
+	}
+	return
+}
+
+// TrailerDoc - return flat trailer doc for already generated rich item's nested trailer
+func (j *DSGit) TrailerDoc(ctx *shared.Ctx, rich, item map[string]interface{}, author string) (trailer map[string]interface{}, skip bool, err error) {
+	trailer = make(map[string]interface{})
+	authorID, ok := item[author+"_id"].(string)
+	if !ok {
+		if ctx.Debug > 0 {
+			shared.Printf("cannot extract %s from %+v", author+"_id", shared.DumpKeys(item))
+		}
+		skip = true
+		return
+	}
+	trailer["type"] = author
+	trailer["author_id"] = authorID
+	// FIXME:
+	shared.Printf("%s trailer: rich=%+v item=%+v\n", author, rich, item)
+	return
+}
+
+// GitEnrichItems - iterate items and enrich them
+// items is a current pack of input items
+// docs is a pointer to where extracted identities will be stored
+func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, docs *[]interface{}, final bool) (err error) {
+	shared.Printf("input processing(%d/%d/%v)\n", len(items), len(*docs), final)
+	outputDocs := func() {
+		if len(*docs) > 0 {
+			// actual output
+			shared.Printf("output processing(%d/%d/%v)\n", len(items), len(*docs), final)
+			data := j.GetModelData(ctx, *docs)
+			// FIXME: actual output to some consumer...
+			jsonBytes, err := jsoniter.Marshal(data)
+			if err != nil {
+				shared.Printf("Error: %+v\n", err)
+				return
+			}
+			shared.Printf("%s\n", string(jsonBytes))
+			*docs = []interface{}{}
+			gMaxUpstreamDtMtx.Lock()
+			defer gMaxUpstreamDtMtx.Unlock()
+			shared.SetLastUpdate(ctx, j.URL, gMaxUpstreamDt)
+		}
+	}
+	if final {
+		defer func() {
+			outputDocs()
+		}()
+	}
+	// NOTE: non-generic code starts
+	var (
+		mtx *sync.RWMutex
+		ch  chan error
+	)
+	if thrN > 1 {
+		mtx = &sync.RWMutex{}
+		ch = make(chan error)
+	}
+	var getRichItems func(map[string]interface{}) ([]interface{}, error)
+	if j.PairProgramming {
+		getRichItems = func(doc map[string]interface{}) (richItems []interface{}, e error) {
+			idata, _ := shared.Dig(doc, []string{"data"}, true, false)
+			data, _ := idata.(map[string]interface{})
+			data["Author-Original"] = data["Author"]
+			authorsMap, firstAuthor := j.GetAuthorsData(ctx, doc, "Author")
+			if len(authorsMap) > 1 {
+				authors := []string{}
+				for auth := range authorsMap {
+					authors = append(authors, auth)
+				}
+				data["authors"] = authors
+				data["Author"] = firstAuthor
+			}
+			committersMap, firstCommitter := j.GetAuthorsData(ctx, doc, "Commit")
+			if len(committersMap) > 1 {
+				committers := []string{}
+				for committer := range committersMap {
+					committers = append(committers, committer)
+				}
+				data["committers"] = committers
+				data["Commit-Original"] = data["Commit"]
+				data["Commit"] = firstCommitter
+			}
+			hasSigners := false
+			hasCoAuthors := false
+			var (
+				signers   []string
+				coAuthors []string
+			)
+			othersMap := j.GetOtherPPAuthors(ctx, doc)
+			if len(othersMap) > 0 {
+				// V2: we assume first author is signer & co-author - but maybe not in V2 mode?
+				// signers = []string{firstAuthor}
+				// coAuthors = []string{firstAuthor}
+				signers = []string{}
+				coAuthors = []string{}
+				for auth, authTypes := range othersMap {
+					if auth == firstAuthor {
+						continue
+					}
+					_, signedOff := authTypes["Signed-off-by"]
+					if signedOff {
+						hasSigners = true
+						signers = append(signers, auth)
+					}
+					_, coAuthored := authTypes["Co-authored-by"]
+					if coAuthored {
+						hasCoAuthors = true
+						coAuthors = append(coAuthors, auth)
+					}
+				}
+				if hasSigners {
+					data["authors_signed_off"] = signers
+				}
+				if hasCoAuthors {
+					data["co_authors"] = coAuthors
+				}
+			}
+			// V2: we don't need this in V2 mode
+			/*
+				uuid, _ := doc[UUID].(string)
+				added := make(map[string]struct{})
+				added[firstAuthor] = struct{}{}
+				aIdx := 0
+				flags := make(map[string]struct{})
+				auth2UUID := make(map[string]string)
+				if len(authorsMap) > 1 {
+					for auth := range authorsMap {
+						_, alreadyAdded := added[auth]
+						if alreadyAdded {
+							continue
+						}
+						added[auth] = struct{}{}
+						flags["is_git_commit_multi_author"] = struct{}{}
+						commitID := uuid + "_" + strconv.Itoa(aIdx)
+						aIdx++
+						auth2UUID[auth] = commitID
+					}
+				}
+				if len(committersMap) > 1 {
+					for auth := range committersMap {
+						_, alreadyAdded := added[auth]
+						if alreadyAdded {
+							continue
+						}
+						added[auth] = struct{}{}
+						flags["is_git_commit_multi_committer"] = struct{}{}
+						commitID := uuid + "_" + strconv.Itoa(aIdx)
+						aIdx++
+						auth2UUID[auth] = commitID
+					}
+				}
+				if hasSigners {
+					for _, auth := range signers {
+						_, alreadyAdded := added[auth]
+						if alreadyAdded {
+							continue
+						}
+						added[auth] = struct{}{}
+						flags["is_git_commit_signed_off"] = struct{}{}
+						commitID := uuid + "_" + strconv.Itoa(aIdx)
+						aIdx++
+						auth2UUID[auth] = commitID
+					}
+				}
+				if hasCoAuthors {
+					for _, auth := range coAuthors {
+						_, alreadyAdded := added[auth]
+						if alreadyAdded {
+							continue
+						}
+						added[auth] = struct{}{}
+						flags["is_git_commit_co_author"] = struct{}{}
+						commitID := uuid + "_" + strconv.Itoa(aIdx)
+						aIdx++
+						auth2UUID[auth] = commitID
+					}
+				}
+				for flag := range flags {
+					data[flag] = 1
+				}
+			*/
+			// Normal enrichment
+			var (
+				rich        map[string]interface{}
+				trailerDocs []map[string]interface{}
+			)
+			rich, e = j.EnrichItem(ctx, doc)
+			if e != nil {
+				return
+			}
+			// V2: here we were adding main doc in V1
+			// richItems = append(richItems, rich)
+			if GitGenerateFlatDocs {
+				trailerDocs, e = j.TrailerDocs(ctx, rich)
+				if e != nil {
+					return
+				}
+				// V2: in V2 we just put tariles on the rich document
+				//for _, trailerDoc := range trailerDocs {
+				//	richItems = append(richItems, trailerDoc)
+				//}
+				rich["trailers"] = trailerDocs
+			}
+			// V2: here we add main doc (with trailers) in V2 instead
+			richItems = append(richItems, rich)
+			// additional authors, committers, signers and co-authors
+			// V2: we just process one commit and its nested fdata
+			/*
+				for auth, gitUUID := range auth2UUID {
+					data["Author"] = auth
+					rich, e = j.EnrichItem(ctx, doc)
+					if e != nil {
+						return
+					}
+					rich[GitUUID] = gitUUID
+					richItems = append(richItems, rich)
+					if GitGenerateFlatDocs {
+						trailerDocs, e = j.TrailerDocs(ctx, rich)
+						if e != nil {
+							return
+						}
+						for _, trailerDoc := range trailerDocs {
+							richItems = append(richItems, trailerDoc)
+						}
+					}
+				}
+			*/
+			return
+		}
+	} else {
+		// Non PP
+		getRichItems = func(doc map[string]interface{}) (richItems []interface{}, e error) {
+			var (
+				rich        map[string]interface{}
+				trailerDocs []map[string]interface{}
+			)
+			rich, e = j.EnrichItem(ctx, doc)
+			if e != nil {
+				return
+			}
+			// V2: here we were adding main doc in V1
+			// richItems = append(richItems, rich)
+			if GitGenerateFlatDocs {
+				trailerDocs, e = j.TrailerDocs(ctx, rich)
+				if e != nil {
+					return
+				}
+				// V2: in V2 we just put tariles on the rich document
+				//for _, trailerDoc := range trailerDocs {
+				//	richItems = append(richItems, trailerDoc)
+				//}
+				rich["trailers"] = trailerDocs
+			}
+			// V2: here we add main doc (with trailers) in V2 instead
+			richItems = append(richItems, rich)
+			return
+		}
+	}
+	nThreads := 0
+	procItem := func(c chan error, idx int) (e error) {
+		if thrN > 1 {
+			mtx.RLock()
+		}
+		item := items[idx]
+		if thrN > 1 {
+			mtx.RUnlock()
+		}
+		defer func() {
+			if c != nil {
+				c <- e
+			}
+		}()
+		// NOTE: never refer to _source - we no longer use ES
+		doc, ok := item.(map[string]interface{})
+		if !ok {
+			e = fmt.Errorf("Failed to parse document %+v", doc)
+			return
+		}
+		richItems, e := getRichItems(doc)
+		if e != nil {
+			return
+		}
+		for _, rich := range richItems {
+			mtx.Lock()
+			e = j.EnrichPairProgrammingItem(rich.(map[string]interface{}))
+			if e != nil {
+				mtx.Unlock()
+				return
+			}
+			mtx.Unlock()
+		}
+		if thrN > 1 {
+			mtx.Lock()
+		}
+		*docs = append(*docs, richItems...)
+		// NOTE: flush here
+		if len(*docs) >= ctx.PackSize {
+			outputDocs()
+		}
+		if thrN > 1 {
+			mtx.Unlock()
+		}
+		return
+	}
+	if thrN > 1 {
+		for i := range items {
+			go func(i int) {
+				_ = procItem(ch, i)
+			}(i)
+			nThreads++
+			if nThreads == thrN {
+				err = <-ch
+				if err != nil {
+					return
+				}
+				nThreads--
+			}
+		}
+		for nThreads > 0 {
+			err = <-ch
+			nThreads--
+			if err != nil {
+				return
+			}
+		}
+		return
+	}
+	for i := range items {
+		err = procItem(nil, i)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
 // Sync - sync git data source
 func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	thrN := shared.GetThreadsNum(ctx)
@@ -909,9 +1411,9 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		shared.Printf("%s fetching till %v (%d threads)\n", j.URL, ctx.DateTo, thrN)
 	}
 	// NOTE: Non-generic starts here
-	// FIXME
 	var (
 		ch            chan error
+		allDocs       []interface{}
 		allCommits    []interface{}
 		allCommitsMtx *sync.Mutex
 		escha         []chan error
@@ -1005,7 +1507,8 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 						c <- ee
 					}
 				}()
-				ee = SendToElastic(ctx, j, true, UUID, allCommits)
+				// ee = SendToQueue(ctx, j, true, UUID, allCommits)
+				ee = j.GitEnrichItems(ctx, thrN, allCommits, &allDocs, false)
 				if ee != nil {
 					shared.Printf("error %v sending %d commits to queue\n", ee, len(allCommits))
 				}
@@ -1122,7 +1625,8 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		shared.Printf("%d remaining commits to send to queue\n", nCommits)
 	}
 	// NOTE: for all items, even if 0 - to flush the queue
-	err = SendToElastic(ctx, j, true, UUID, allCommits)
+	// err = SendToQueue(ctx, j, true, UUID, allCommits)
+	err = j.GitEnrichItems(ctx, thrN, allCommits, &allDocs, true)
 	if err != nil {
 		shared.Printf("Error %v sending %d commits to queue\n", err, len(allCommits))
 	}
