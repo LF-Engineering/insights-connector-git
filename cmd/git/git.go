@@ -4,14 +4,18 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/LF-Engineering/insights-datasource-git/gen/models"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	jsoniter "github.com/json-iterator/go"
 	// jsoniter "github.com/json-iterator/go"
 )
 
@@ -602,6 +606,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 
 // EnrichItem - return rich item from raw item for a given author type
 func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich map[string]interface{}, err error) {
+	// FIXME
 	// NOTE: From shared
 	rich["metadata__enriched_on"] = time.Now()
 	// rich[ProjectSlug] = ctx.ProjectSlug
@@ -634,6 +639,260 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 	return
 }
 
+// ItemID - return unique identifier for an item
+func (j *DSGit) ItemID(item interface{}) string {
+	id, ok := item.(map[string]interface{})["commit"].(string)
+	if !ok {
+		shared.Fatalf("git: ItemID() - cannot extract commit from %+v", shared.DumpKeys(item))
+	}
+	return id
+}
+
+// ItemUpdatedOn - return updated on date for an item
+func (j *DSGit) ItemUpdatedOn(item interface{}) time.Time {
+	iUpdated, _ := shared.Dig(item, []string{GitCommitDateField}, true, false)
+	sUpdated, ok := iUpdated.(string)
+	if !ok {
+		shared.Fatalf("git: ItemUpdatedOn() - cannot extract %s from %+v", GitCommitDateField, shared.DumpKeys(item))
+	}
+	updated, _, _, ok := shared.ParseDateWithTz(sUpdated)
+	if !ok {
+		shared.Fatalf("git: %s: ItemUpdatedOn() - cannot extract %s from %s", GitCommitDateField, sUpdated)
+	}
+	return updated
+}
+
+// AddMetadata - add metadata to the item
+func (j *DSGit) AddMetadata(ctx *shared.Ctx, item interface{}) (mItem map[string]interface{}) {
+	mItem = make(map[string]interface{})
+	origin := j.URL
+	tags := ctx.Tags
+	if len(tags) == 0 {
+		tags = []string{origin}
+	}
+	commitSHA := j.ItemID(item)
+	updatedOn := j.ItemUpdatedOn(item)
+	uuid := shared.UUIDNonEmpty(ctx, origin, commitSHA)
+	timestamp := time.Now()
+	mItem["backend_name"] = ctx.DS
+	mItem["backend_version"] = GitBackendVersion
+	mItem["timestamp"] = fmt.Sprintf("%.06f", float64(timestamp.UnixNano())/1.0e9)
+	mItem["uuid"] = uuid
+	mItem["origin"] = origin
+	mItem["tags"] = tags
+	mItem["offset"] = float64(updatedOn.Unix())
+	mItem["category"] = "commit"
+	mItem["search_fields"] = make(map[string]interface{})
+	shared.FatalOnError(shared.DeepSet(mItem, []string{"search_fields", GitDefaultSearchField}, commitSHA, false))
+	mItem["metadata__updated_on"] = shared.ToESDate(updatedOn)
+	mItem["metadata__timestamp"] = shared.ToESDate(timestamp)
+	// mItem[ProjectSlug] = ctx.ProjectSlug
+	if ctx.Debug > 1 {
+		shared.Printf("%s: %s: %v %v\n", origin, uuid, commitSHA, updatedOn)
+	}
+	return
+}
+
+// GetGitOps - LOC, lang summary stats
+func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) {
+	worker := func(c chan error, url string) (e error) {
+		defer func() {
+			if c != nil {
+				c <- e
+			}
+		}()
+		var (
+			sout string
+			serr string
+		)
+		cmdLine := []string{GitOpsCommand, url}
+		var env map[string]string
+		if GitOpsNoCleanup {
+			env = map[string]string{"SKIP_CLEANUP": "1"}
+		}
+		sout, serr, e = shared.ExecCommand(ctx, cmdLine, "", env)
+		if e != nil {
+			if GitOpsFailureFatal {
+				shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+			} else {
+				shared.Printf("WARNING: error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+				e = nil
+			}
+			return
+		}
+		type resultType struct {
+			Loc int      `json:"loc"`
+			Pls []RawPLS `json:"pls"`
+		}
+		var data resultType
+		e = jsoniter.Unmarshal([]byte(sout), &data)
+		if e != nil {
+			if GitOpsFailureFatal {
+				shared.Printf("error unmarshaling from %v\n", sout)
+			} else {
+				shared.Printf("WARNING: error unmarshaling from %v\n", sout)
+				e = nil
+			}
+			return
+		}
+		j.Loc = data.Loc
+		for _, f := range data.Pls {
+			files, _ := strconv.Atoi(f.Files)
+			blank, _ := strconv.Atoi(f.Blank)
+			comment, _ := strconv.Atoi(f.Comment)
+			code, _ := strconv.Atoi(f.Code)
+			j.Pls = append(
+				j.Pls,
+				PLS{
+					Language: f.Language,
+					Files:    files,
+					Blank:    blank,
+					Comment:  comment,
+					Code:     code,
+				},
+			)
+		}
+		return
+	}
+	if thrN <= 1 {
+		return nil, worker(nil, j.URL)
+	}
+	ch = make(chan error)
+	go func() { _ = worker(ch, j.URL) }()
+	return ch, nil
+}
+
+// CreateGitRepo - clone git repo if needed
+func (j *DSGit) CreateGitRepo(ctx *shared.Ctx) (err error) {
+	info, err := os.Stat(j.GitPath)
+	var exists bool
+	if !os.IsNotExist(err) {
+		if info.IsDir() {
+			exists = true
+		} else {
+			err = fmt.Errorf("%s exists and is a file, not a directory", j.GitPath)
+			return
+		}
+	}
+	if !exists {
+		if ctx.Debug > 0 {
+			shared.Printf("cloning %s to %s\n", j.URL, j.GitPath)
+		}
+		cmdLine := []string{"git", "clone", "--bare", j.URL, j.GitPath}
+		env := map[string]string{"LANG": "C"}
+		var sout, serr string
+		sout, serr, err = shared.ExecCommand(ctx, cmdLine, "", env)
+		if err != nil {
+			shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, err, sout, serr)
+			return
+		}
+		if ctx.Debug > 0 {
+			shared.Printf("cloned %s to %s\n", j.URL, j.GitPath)
+		}
+	}
+	headPath := j.GitPath + "/HEAD"
+	info, err = os.Stat(headPath)
+	if os.IsNotExist(err) {
+		shared.Printf("Missing %s file\n", headPath)
+		return
+	}
+	if info.IsDir() {
+		err = fmt.Errorf("%s is a directory, not file", headPath)
+	}
+	return
+}
+
+// UpdateGitRepo - update git repo
+func (j *DSGit) UpdateGitRepo(ctx *shared.Ctx) (err error) {
+	if ctx.Debug > 0 {
+		shared.Printf("updating repo %s\n", j.URL)
+	}
+	cmdLine := []string{"git", "fetch", "origin", "+refs/heads/*:refs/heads/*", "--prune"}
+	var sout, serr string
+	sout, serr, err = shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	if err != nil {
+		shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, err, sout, serr)
+		return
+	}
+	if ctx.Debug > 0 {
+		shared.Printf("updated repo %s\n", j.URL)
+	}
+	return
+}
+
+// GetOrphanedCommits - return data about orphaned commits: commits present in git object storage
+// but not present in rev-list - for example squashed commits
+func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, err error) {
+	worker := func(c chan error) (e error) {
+		shared.Printf("searching for orphaned commits\n")
+		defer func() {
+			if c != nil {
+				c <- e
+			}
+		}()
+		var (
+			sout string
+			serr string
+		)
+		cmdLine := []string{OrphanedCommitsCommand}
+		sout, serr, e = shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+		if e != nil {
+			if OrphanedCommitsFailureFatal {
+				shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+			} else {
+				shared.Printf("WARNING: error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+				e = nil
+			}
+			return
+		}
+		ary := strings.Split(sout, " ")
+		for _, sha := range ary {
+			sha = strings.TrimSpace(sha)
+			if sha == "" {
+				continue
+			}
+			j.OrphanedCommits = append(j.OrphanedCommits, sha)
+		}
+		shared.Printf("found %d orphaned commits\n", len(j.OrphanedCommits))
+		if ctx.Debug > 1 {
+			shared.Printf("OrphanedCommits: %+v\n", j.OrphanedCommits)
+		}
+		return
+	}
+	if thrN <= 1 {
+		return nil, worker(nil)
+	}
+	ch = make(chan error)
+	go func() { _ = worker(ch) }()
+	return ch, nil
+}
+
+// ParseGitLog - update git repo
+func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
+	if ctx.Debug > 0 {
+		shared.Printf("parsing logs from %s\n", j.GitPath)
+	}
+	cmdLine := []string{"git", "log", "--reverse", "--topo-order", "--branches", "--tags", "--remotes=origin"}
+	cmdLine = append(cmdLine, GitLogOptions...)
+	if ctx.DateFrom != nil {
+		cmdLine = append(cmdLine, "--since="+shared.ToYMDHMSDate(*ctx.DateFrom))
+	}
+	if ctx.DateTo != nil {
+		cmdLine = append(cmdLine, "--until="+shared.ToYMDHMSDate(*ctx.DateTo))
+	}
+	var pipe io.ReadCloser
+	pipe, cmd, err = shared.ExecCommandPipe(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	if err != nil {
+		shared.Printf("error executing %v: %v\n", cmdLine, err)
+		return
+	}
+	j.LineScanner = bufio.NewScanner(pipe)
+	if ctx.Debug > 0 {
+		shared.Printf("created logs scanner %s\n", j.GitPath)
+	}
+	return
+}
+
 // Sync - sync git data source
 func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	thrN := shared.GetThreadsNum(ctx)
@@ -650,6 +909,238 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		shared.Printf("%s fetching till %v (%d threads)\n", j.URL, ctx.DateTo, thrN)
 	}
 	// NOTE: Non-generic starts here
+	// FIXME
+	var (
+		ch            chan error
+		allCommits    []interface{}
+		allCommitsMtx *sync.Mutex
+		escha         []chan error
+		eschaMtx      *sync.Mutex
+		goch          chan error
+		occh          chan error
+		waitLOCMtx    *sync.Mutex
+	)
+	if thrN > 1 {
+		ch = make(chan error)
+		allCommitsMtx = &sync.Mutex{}
+		eschaMtx = &sync.Mutex{}
+		waitLOCMtx = &sync.Mutex{}
+		goch, _ = j.GetGitOps(ctx, thrN)
+	} else {
+		_, err = j.GetGitOps(ctx, thrN)
+		if err != nil {
+			return
+		}
+	}
+	// Do normal git processing, which don't needs gitops yet
+	j.GitPath = j.ReposPath + "/" + j.URL + "-git"
+	j.GitPath, err = shared.EnsurePath(j.GitPath, true)
+	shared.FatalOnError(err)
+	if ctx.Debug > 0 {
+		shared.Printf("path to store git repository: %s\n", j.GitPath)
+	}
+	shared.FatalOnError(j.CreateGitRepo(ctx))
+	shared.FatalOnError(j.UpdateGitRepo(ctx))
+	if thrN > 1 {
+		occh, _ = j.GetOrphanedCommits(ctx, thrN)
+	} else {
+		_, err = j.GetOrphanedCommits(ctx, thrN)
+		if err != nil {
+			return
+		}
+	}
+	var cmd *exec.Cmd
+	cmd, err = j.ParseGitLog(ctx)
+	// Continue with operations that need git ops
+	nThreads := 0
+	locFinished := false
+	waitForLOC := func() (e error) {
+		if thrN == 1 {
+			return
+		}
+		waitLOCMtx.Lock()
+		if !locFinished {
+			if ctx.Debug > 0 {
+				shared.Printf("waiting for git ops result\n")
+			}
+			e = <-goch
+			if e != nil {
+				waitLOCMtx.Unlock()
+				return
+			}
+			locFinished = true
+			if ctx.Debug > 0 {
+				shared.Printf("loc: %d, programming languages: %d\n", j.Loc, len(j.Pls))
+			}
+		}
+		waitLOCMtx.Unlock()
+		return
+	}
+	processCommit := func(c chan error, commit map[string]interface{}) (wch chan error, e error) {
+		defer func() {
+			if c != nil {
+				c <- e
+			}
+		}()
+		esItem := j.AddMetadata(ctx, commit)
+		if ctx.Project != "" {
+			commit["project"] = ctx.Project
+		}
+		e = waitForLOC()
+		if e != nil {
+			return
+		}
+		commit["total_lines_of_code"] = j.Loc
+		commit["program_language_summary"] = j.Pls
+		esItem["data"] = commit
+		if allCommitsMtx != nil {
+			allCommitsMtx.Lock()
+		}
+		allCommits = append(allCommits, esItem)
+		nCommits := len(allCommits)
+		if nCommits >= ctx.PackSize {
+			sendToQueue := func(c chan error) (ee error) {
+				defer func() {
+					if c != nil {
+						c <- ee
+					}
+				}()
+				ee = SendToElastic(ctx, j, true, UUID, allCommits)
+				if ee != nil {
+					shared.Printf("error %v sending %d commits to queue\n", ee, len(allCommits))
+				}
+				allCommits = []interface{}{}
+				if allCommitsMtx != nil {
+					allCommitsMtx.Unlock()
+				}
+				return
+			}
+			if thrN > 1 {
+				wch = make(chan error)
+				go func() {
+					_ = sendToQueue(wch)
+				}()
+			} else {
+				e = sendToQueue(nil)
+				if e != nil {
+					return
+				}
+			}
+		} else {
+			if allCommitsMtx != nil {
+				allCommitsMtx.Unlock()
+			}
+		}
+		return
+	}
+	var (
+		commit map[string]interface{}
+		ok     bool
+	)
+	if thrN > 1 {
+		for {
+			commit, ok, err = j.ParseNextCommit(ctx)
+			if err != nil {
+				return
+			}
+			if !ok {
+				break
+			}
+			go func(com map[string]interface{}) {
+				var (
+					e    error
+					esch chan error
+				)
+				esch, e = processCommit(ch, com)
+				if e != nil {
+					shared.Printf("process error: %v\n", e)
+					return
+				}
+				if esch != nil {
+					if eschaMtx != nil {
+						eschaMtx.Lock()
+					}
+					escha = append(escha, esch)
+					if eschaMtx != nil {
+						eschaMtx.Unlock()
+					}
+				}
+			}(commit)
+			nThreads++
+			if nThreads == thrN {
+				err = <-ch
+				if err != nil {
+					return
+				}
+				nThreads--
+			}
+		}
+		for nThreads > 0 {
+			err = <-ch
+			nThreads--
+			if err != nil {
+				return
+			}
+		}
+	} else {
+		for {
+			commit, ok, err = j.ParseNextCommit(ctx)
+			if err != nil {
+				return
+			}
+			if !ok {
+				break
+			}
+			_, err = processCommit(nil, commit)
+			if err != nil {
+				return
+			}
+		}
+	}
+	// NOTE: lock needed
+	if eschaMtx != nil {
+		eschaMtx.Lock()
+	}
+	for _, esch := range escha {
+		err = <-esch
+		if err != nil {
+			if eschaMtx != nil {
+				eschaMtx.Unlock()
+			}
+			return
+		}
+	}
+	if eschaMtx != nil {
+		eschaMtx.Unlock()
+	}
+	err = cmd.Wait()
+	if err != nil {
+		return
+	}
+	nCommits := len(allCommits)
+	if ctx.Debug > 0 {
+		shared.Printf("%d remaining commits to send to queue\n", nCommits)
+	}
+	// NOTE: for all items, even if 0 - to flush the queue
+	err = SendToElastic(ctx, j, true, UUID, allCommits)
+	if err != nil {
+		shared.Printf("Error %v sending %d commits to queue\n", err, len(allCommits))
+	}
+	if !locFinished {
+		go func() {
+			if ctx.Debug > 0 {
+				shared.Printf("gitops result not needed, but waiting for orphan process\n")
+			}
+			<-goch
+			locFinished = true
+			if ctx.Debug > 0 {
+				shared.Printf("loc: %d, programming languages: %d\n", j.Loc, len(j.Pls))
+			}
+		}()
+	}
+	if thrN > 0 {
+		err = <-occh
+	}
 	// NOTE: Non-generic ends here
 	gMaxUpstreamDtMtx.Lock()
 	defer gMaxUpstreamDtMtx.Unlock()
