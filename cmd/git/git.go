@@ -528,6 +528,7 @@ type DSGit struct {
 	CommitFiles     map[string]map[string]interface{} // current commit's files
 	RecentLines     []string                          // recent commit lines
 	OrphanedCommits []string                          // orphaned commits SHAs
+	OrphanedMap     map[string]struct{}               // orphaned commits SHAs
 	// PairProgramming mode
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
@@ -585,6 +586,7 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	// NOTE: We enable pair programming by default
 	j.PairProgramming = true
 	j.CommitsHash = make(map[string]map[string]struct{})
+	j.OrphanedMap = make(map[string]struct{})
 
 	// NOTE: don't forget this
 	gGitMetaData.Project = ctx.Project
@@ -903,6 +905,8 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	rich["lines_changed"] = linesAdded + linesRemoved
 	doc, _ := shared.Dig(commit, []string{"doc_commit"}, false, true)
 	rich["doc_commit"] = doc
+	empty, _ := shared.Dig(commit, []string{"empty_commit"}, false, true)
+	rich["empty_commit"] = empty
 	loc, ok := shared.Dig(commit, []string{"total_lines_of_code"}, false, true)
 	if ok {
 		rich["total_lines_of_code"] = loc
@@ -1002,7 +1006,6 @@ func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error)
 			if innerMap := j.CommitsHash[repoString]; innerMap == nil {
 				j.CommitsHash[repoString] = make(map[string]struct{})
 			}
-
 			if _, ok := j.CommitsHash[repoString][commitString]; ok {
 				// do nothing because the hash exists in the commits map
 				richItem["is_parent_commit"] = 0
@@ -1032,6 +1035,12 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 	for _, iDoc := range docs {
 		doc, _ := iDoc.(map[string]interface{})
 		docUUID, _ := doc["uuid"].(string)
+		commitURL, _ := doc["commit_url"].(string)
+		sha, _ := doc["hash"].(string)
+		hashShort, _ := doc["hash_short"].(string)
+		docCommit, _ := doc["doc_commit"].(bool)
+		emptyCommit, _ := doc["empty_commit"].(bool)
+		_, squashedCommit := j.OrphanedMap["sha"]
 		// shared.Printf("%s(%s): rich %+v\n", source, docUUID, doc)
 		var updatedOn time.Time
 		// Event
@@ -1040,13 +1049,14 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 			Commit: &models.Commit{
 				ID:           docUUID,
 				DataSourceID: source,
+				CommitURL:    commitURL,
+				SHA:          sha,
+				HashShort:    hashShort,
+				IsDoc:        docCommit,
+				IsEmpty:      emptyCommit,
+				IsSquashed:   squashedCommit,
 				/*
-				  CommitURL string `json:"CommitURL,omitempty"`
 				  Files []*CommitFileAction `json:"Files"`
-				  HashShort string `json:"HashShort,omitempty"`
-				  IsDoc bool `json:"IsDoc,omitempty"`
-				  IsEmpty bool `json:"IsEmpty,omitempty"`
-				  IsMerge bool `json:"IsMerge,omitempty"`
 				  IsSquashed bool `json:"IsSquashed,omitempty"`
 				  Message *string `json:"Message,omitempty"`
 				  Parents []string `json:"Parents"`
@@ -1054,7 +1064,6 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 				  RepositoryType string `json:"RepositoryType,omitempty"`
 				  RepositoryURL string `json:"RepositoryURL,omitempty"`
 				  Roles []*CommitRole `json:"Roles"`
-				  SHA string `json:"SHA,omitempty"`
 				  Stats *CommitStats `json:"Stats,omitempty"`
 				  Title *string `json:"Title,omitempty"`
 				*/
@@ -1270,7 +1279,9 @@ func (j *DSGit) UpdateGitRepo(ctx *shared.Ctx) (err error) {
 // but not present in rev-list - for example squashed commits
 func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, err error) {
 	worker := func(c chan error) (e error) {
-		shared.Printf("searching for orphaned commits\n")
+		if ctx.Debug > 0 {
+			shared.Printf("searching for orphaned commits\n")
+		}
 		defer func() {
 			if c != nil {
 				c <- e
@@ -1298,6 +1309,7 @@ func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, er
 				continue
 			}
 			j.OrphanedCommits = append(j.OrphanedCommits, sha)
+			j.OrphanedMap[sha] = struct{}{}
 		}
 		shared.Printf("found %d orphaned commits\n", len(j.OrphanedCommits))
 		if ctx.Debug > 1 {
@@ -1922,6 +1934,7 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 			if j.ParseState == GitParseStateCommit && j.Commit != nil {
 				commit = j.BuildCommit(ctx)
 				if empty {
+					commit["empty_commit"] = true
 					parsed, err = j.ParseCommit(ctx, line)
 					if !parsed || err != nil {
 						shared.Printf("failed to parse commit after empty file section\n")
@@ -2014,7 +2027,18 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			if ctx.Debug > 0 {
 				shared.Printf("waiting for git ops result\n")
 			}
-			e = <-goch
+			e1 := <-goch
+			e2 := <-occh
+			if e1 != nil && e2 != nil {
+				e = fmt.Errorf("gitops error: %+v, orphaned commits error: %+v", e1, e2)
+			} else {
+				if e1 != nil {
+					e = e1
+				}
+				if e2 != nil {
+					e = e1
+				}
+			}
 			if e != nil {
 				waitLOCMtx.Unlock()
 				return
@@ -2182,17 +2206,15 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if !locFinished {
 		go func() {
 			if ctx.Debug > 0 {
-				shared.Printf("gitops result not needed, but waiting for orphan process\n")
+				shared.Printf("gitops and orphaned commits result not needed, but waiting for orphan process\n")
 			}
 			<-goch
+			<-occh
 			locFinished = true
 			if ctx.Debug > 0 {
-				shared.Printf("loc: %d, programming languages: %d\n", j.Loc, len(j.Pls))
+				shared.Printf("loc: %d, programming languages: %d, orphaned commits: %d\n", j.Loc, len(j.Pls), len(j.OrphanedMap))
 			}
 		}()
-	}
-	if thrN > 1 {
-		err = <-occh
 	}
 	// NOTE: Non-generic ends here
 	gMaxUpstreamDtMtx.Lock()

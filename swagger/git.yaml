@@ -154,9 +154,6 @@ definitions:
       IsDoc:
         type: boolean
         example: true
-      IsMerge:
-        type: boolean
-        example: true
       IsEmpty:
         type: boolean
         example: true
