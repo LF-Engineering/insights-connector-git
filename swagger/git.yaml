@@ -217,9 +217,6 @@ definitions:
       Commit:
         type: object
         $ref: "#/definitions/Commit"
-      RepositoryStats:
-        type: object
-        $ref: "#/definitions/RepositoryStats"
   Data:
     type: object
     description: this is the final output of insights-datasource-git, data source will output packs up to some fixed size, like 500 events pack at once
@@ -234,6 +231,9 @@ definitions:
         type: string
         description: git endpoint for which data is being sent
         example: https://github.com/cncf/devstats
+      RepositoryStats:
+        type: object
+        $ref: "#/definitions/RepositoryStats"
       Events:
         type: array
         items:

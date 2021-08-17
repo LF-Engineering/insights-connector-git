@@ -18,6 +18,7 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/gen/models"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/go-openapi/strfmt"
 	jsoniter "github.com/json-iterator/go"
 	// jsoniter "github.com/json-iterator/go"
 )
@@ -515,9 +516,10 @@ type DSGit struct {
 	FlagCachePath        *string
 	FlagSkipCacheCleanup *bool
 	// Non-config variables
-	RepoName        string                            // repo name
-	Loc             int                               // lines of code as reported by GitOpsCommand
-	Pls             []PLS                             // programming language suppary as reported by GitOpsCommand
+	RepoName        string // repo name
+	Loc             int    // lines of code as reported by GitOpsCommand
+	Pls             []PLS  // programming language suppary as reported by GitOpsCommand
+	StatsDt         time.Time
 	GitPath         string                            // path to git repo clone
 	LineScanner     *bufio.Scanner                    // line scanner for git log
 	CurrLine        int                               // current line in git log
@@ -530,6 +532,8 @@ type DSGit struct {
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
 	CommitsHash map[string]map[string]struct{}
+	// ModelPLS - store PLS data
+	ModelPLS []*models.LanguageStats
 }
 
 // AddFlags - add git specific flags
@@ -577,9 +581,9 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 		j.SkipCacheCleanup = skipCacheCleanup
 	}
 
+	// Some extra initializations
 	// NOTE: We enable pair programming by default
 	j.PairProgramming = true
-
 	j.CommitsHash = make(map[string]map[string]struct{})
 
 	// NOTE: don't forget this
@@ -1017,15 +1021,26 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 		DataSource: GitDataSource,
 		MetaData:   gGitMetaData,
 		Endpoint:   j.URL,
+		RepositoryStats: &models.RepositoryStats{
+			CalculatedAt:              strfmt.DateTime(j.StatsDt),
+			ProgrammingLanguagesStats: j.ModelPLS,
+			RepositoryURL:             j.URL,
+			TotalLinesOfCode:          int64(j.Loc),
+		},
 	}
 	source := data.DataSource.Slug
 	for _, iDoc := range docs {
 		doc, _ := iDoc.(map[string]interface{})
-		// Event
+		docUUID, _ := doc["uuid"].(string)
 		// FIXME
-		shared.Printf("%s: %+v\n", source, doc)
+		shared.Printf("%s(%s): rich %+v\n", source, docUUID, doc)
 		var updatedOn time.Time
-		event := &models.Event{}
+		// Event
+		/////////////
+		event := &models.Event{
+			Commit: &models.Commit{},
+		}
+		/////////////
 		data.Events = append(data.Events, event)
 		gMaxUpstreamDtMtx.Lock()
 		if updatedOn.After(gMaxUpstreamDt) {
@@ -1135,6 +1150,7 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 			}
 			return
 		}
+		j.StatsDt = time.Now()
 		j.Loc = data.Loc
 		for _, f := range data.Pls {
 			files, _ := strconv.Atoi(f.Files)
@@ -1151,6 +1167,16 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 					Code:     code,
 				},
 			)
+		}
+		for _, item := range j.Pls {
+			j.ModelPLS = append(j.ModelPLS, &models.LanguageStats{
+				CalculatedAt: strfmt.DateTime(j.StatsDt),
+				Language:     item.Language,
+				Blank:        int64(item.Blank),
+				Code:         int64(item.Code),
+				Comment:      int64(item.Comment),
+				Files:        int64(item.Files),
+			})
 		}
 		return
 	}
