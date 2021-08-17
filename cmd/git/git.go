@@ -749,9 +749,6 @@ func (j *DSGit) GetOtherTrailersAuthors(ctx *shared.Ctx, doc interface{}) (other
 
 // EnrichItem - return rich item from raw item for a given author type
 func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich map[string]interface{}, err error) {
-	// authors, committers, co_authors, authors_signed_off
-	// jsonBytes, _ := jsoniter.Marshal(item["data"].(map[string]interface{})["authors"])
-	// shared.Printf("EnrichItem: authors: %+v\n", string(jsonBytes))
 	rich = make(map[string]interface{})
 	for _, field := range shared.RawFields {
 		v, _ := item[field]
@@ -762,7 +759,6 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("missing data field in item %+v", shared.DumpKeys(item))
 		return
 	}
-	fmt.Printf("EnrichItem: commit=%+v\n", commit)
 	iAuthorDate, _ := shared.Dig(commit, []string{"AuthorDate"}, true, false)
 	sAuthorDate, _ := iAuthorDate.(string)
 	authorDate, authorDateTz, authorTz, ok := shared.ParseDateWithTz(sAuthorDate)
@@ -915,9 +911,26 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		rich["github_repo"] = githubRepo
 		rich["url_id"] = githubRepo + "/commit/" + hsh
 	}
+	// authors, committers (can be set from PP)
+	var (
+		authorsMap    map[string]struct{}
+		committersMap map[string]struct{}
+	)
+	iAuthors, ok := commit["authors"]
+	if ok {
+		authorsMap, _ = iAuthors.(map[string]struct{})
+	} else {
+		authorsMap = map[string]struct{}{}
+	}
+	iCommitters, ok := commit["committers"]
+	if ok {
+		committersMap, _ = iCommitters.(map[string]struct{})
+	} else {
+		committersMap = map[string]struct{}{}
+	}
 	othersMap := j.GetOtherTrailersAuthors(ctx, item)
 	// FIXME: richOthersMap
-	fmt.Printf("richOthersMap: %+v\n", othersMap)
+	fmt.Printf("authorsMap: %+v, committersMap: %+v, richOthersMap: %+v\n", authorsMap, committersMap, othersMap)
 	/*
 		otherIdents := map[string]map[string]interface{}{}
 		rolePH := "{{r}}"
@@ -1485,7 +1498,7 @@ func (j *DSGit) TrailerDoc(ctx *shared.Ctx, rich, item map[string]interface{}, a
 	trailer["type"] = author
 	trailer["author_id"] = authorID
 	// FIXME:
-	shared.Printf("%s trailer: rich=%+v item=%+v\n", author, rich, item)
+	fmt.Printf("%s trailer: rich=%+v item=%+v\n", author, rich, item)
 	return
 }
 
@@ -1528,131 +1541,22 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 	}
 	var getRichItems func(map[string]interface{}) ([]interface{}, error)
 	if j.PairProgramming {
+		// PP
 		getRichItems = func(doc map[string]interface{}) (richItems []interface{}, e error) {
 			idata, _ := shared.Dig(doc, []string{"data"}, true, false)
 			data, _ := idata.(map[string]interface{})
 			data["Author-Original"] = data["Author"]
 			authorsMap, firstAuthor := j.GetAuthorsData(ctx, doc, "Author")
 			if len(authorsMap) > 0 {
-				authors := []string{}
-				for auth := range authorsMap {
-					authors = append(authors, auth)
-				}
-				data["authors"] = authors
+				data["authors"] = authorsMap
 				data["Author"] = firstAuthor
 			}
 			committersMap, firstCommitter := j.GetAuthorsData(ctx, doc, "Commit")
 			if len(committersMap) > 0 {
-				committers := []string{}
-				for committer := range committersMap {
-					committers = append(committers, committer)
-				}
-				data["committers"] = committers
+				data["committers"] = committersMap
 				data["Commit-Original"] = data["Commit"]
 				data["Commit"] = firstCommitter
 			}
-			hasSigners := false
-			hasCoAuthors := false
-			var (
-				signers   []string
-				coAuthors []string
-			)
-			othersMap := j.GetOtherPPAuthors(ctx, doc)
-			// FIXME:
-			fmt.Printf("authorsMap=%+v, committersMap=%+v, othersMap=%+v\n", authorsMap, committersMap, othersMap)
-			if len(othersMap) > 0 {
-				// V2: we assume first author is signer & co-author - but maybe not in V2 mode?
-				// signers = []string{firstAuthor}
-				// coAuthors = []string{firstAuthor}
-				signers = []string{}
-				coAuthors = []string{}
-				for auth, authTypes := range othersMap {
-					if auth == firstAuthor {
-						continue
-					}
-					_, signedOff := authTypes["Signed-off-by"]
-					if signedOff {
-						hasSigners = true
-						signers = append(signers, auth)
-					}
-					_, coAuthored := authTypes["Co-authored-by"]
-					if coAuthored {
-						hasCoAuthors = true
-						coAuthors = append(coAuthors, auth)
-					}
-				}
-				if hasSigners {
-					data["authors_signed_off"] = signers
-				}
-				if hasCoAuthors {
-					data["co_authors"] = coAuthors
-				}
-			}
-			// V2: we don't need this in V2 mode
-			/*
-				uuid, _ := doc[UUID].(string)
-				added := make(map[string]struct{})
-				added[firstAuthor] = struct{}{}
-				aIdx := 0
-				flags := make(map[string]struct{})
-				auth2UUID := make(map[string]string)
-				if len(authorsMap) > 1 {
-					for auth := range authorsMap {
-						_, alreadyAdded := added[auth]
-						if alreadyAdded {
-							continue
-						}
-						added[auth] = struct{}{}
-						flags["is_git_commit_multi_author"] = struct{}{}
-						commitID := uuid + "_" + strconv.Itoa(aIdx)
-						aIdx++
-						auth2UUID[auth] = commitID
-					}
-				}
-				if len(committersMap) > 1 {
-					for auth := range committersMap {
-						_, alreadyAdded := added[auth]
-						if alreadyAdded {
-							continue
-						}
-						added[auth] = struct{}{}
-						flags["is_git_commit_multi_committer"] = struct{}{}
-						commitID := uuid + "_" + strconv.Itoa(aIdx)
-						aIdx++
-						auth2UUID[auth] = commitID
-					}
-				}
-				if hasSigners {
-					for _, auth := range signers {
-						_, alreadyAdded := added[auth]
-						if alreadyAdded {
-							continue
-						}
-						added[auth] = struct{}{}
-						flags["is_git_commit_signed_off"] = struct{}{}
-						commitID := uuid + "_" + strconv.Itoa(aIdx)
-						aIdx++
-						auth2UUID[auth] = commitID
-					}
-				}
-				if hasCoAuthors {
-					for _, auth := range coAuthors {
-						_, alreadyAdded := added[auth]
-						if alreadyAdded {
-							continue
-						}
-						added[auth] = struct{}{}
-						flags["is_git_commit_co_author"] = struct{}{}
-						commitID := uuid + "_" + strconv.Itoa(aIdx)
-						aIdx++
-						auth2UUID[auth] = commitID
-					}
-				}
-				for flag := range flags {
-					data[flag] = 1
-				}
-			*/
-			// Normal enrichment
 			var (
 				rich        map[string]interface{}
 				trailerDocs []map[string]interface{}
@@ -1661,43 +1565,14 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			if e != nil {
 				return
 			}
-			// V2: here we were adding main doc in V1
-			// richItems = append(richItems, rich)
 			if GitGenerateFlatDocs {
 				trailerDocs, e = j.TrailerDocs(ctx, rich)
 				if e != nil {
 					return
 				}
-				// V2: in V2 we just put tariles on the rich document
-				//for _, trailerDoc := range trailerDocs {
-				//	richItems = append(richItems, trailerDoc)
-				//}
 				rich["trailers"] = trailerDocs
 			}
-			// V2: here we add main doc (with trailers) in V2 instead
 			richItems = append(richItems, rich)
-			// additional authors, committers, signers and co-authors
-			// V2: we just process one commit and its nested fdata
-			/*
-				for auth, gitUUID := range auth2UUID {
-					data["Author"] = auth
-					rich, e = j.EnrichItem(ctx, doc)
-					if e != nil {
-						return
-					}
-					rich[GitUUID] = gitUUID
-					richItems = append(richItems, rich)
-					if GitGenerateFlatDocs {
-						trailerDocs, e = j.TrailerDocs(ctx, rich)
-						if e != nil {
-							return
-						}
-						for _, trailerDoc := range trailerDocs {
-							richItems = append(richItems, trailerDoc)
-						}
-					}
-				}
-			*/
 			return
 		}
 	} else {
@@ -1711,20 +1586,13 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			if e != nil {
 				return
 			}
-			// V2: here we were adding main doc in V1
-			// richItems = append(richItems, rich)
 			if GitGenerateFlatDocs {
 				trailerDocs, e = j.TrailerDocs(ctx, rich)
 				if e != nil {
 					return
 				}
-				// V2: in V2 we just put tariles on the rich document
-				//for _, trailerDoc := range trailerDocs {
-				//	richItems = append(richItems, trailerDoc)
-				//}
 				rich["trailers"] = trailerDocs
 			}
-			// V2: here we add main doc (with trailers) in V2 instead
 			richItems = append(richItems, rich)
 			return
 		}
