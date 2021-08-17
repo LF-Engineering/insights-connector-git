@@ -747,6 +747,19 @@ func (j *DSGit) GetOtherTrailersAuthors(ctx *shared.Ctx, doc interface{}) (other
 	return
 }
 
+// IdentityFromGitAuthor - construct identity from git author
+func (j *DSGit) IdentityFromGitAuthor(ctx *shared.Ctx, author string) (identity [3]string) {
+	fields := strings.Split(author, "<")
+	name := strings.TrimSpace(fields[0])
+	email := ""
+	if len(fields) > 1 {
+		fields2 := strings.Split(fields[1], ">")
+		email = strings.TrimSpace(fields2[0])
+	}
+	identity = [3]string{name, "", email}
+	return
+}
+
 // EnrichItem - return rich item from raw item for a given author type
 func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich map[string]interface{}, err error) {
 	rich = make(map[string]interface{})
@@ -931,96 +944,44 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	othersMap := j.GetOtherTrailersAuthors(ctx, item)
 	// FIXME: richOthersMap
 	fmt.Printf("authorsMap: %+v, committersMap: %+v, richOthersMap: %+v\n", authorsMap, committersMap, othersMap)
+	idents := [][3]string{}
+	identTypes := []string{}
+	otherIdents := map[string][3]string{}
+	for authorStr := range authorsMap {
+		ident, ok := otherIdents[authorStr]
+		if !ok {
+			ident = j.IdentityFromGitAuthor(ctx, authorStr)
+			otherIdents[authorStr] = ident
+		}
+		idents = append(idents, ident)
+		identTypes = append(identTypes, "author")
+	}
+	for authorStr := range committersMap {
+		ident, ok := otherIdents[authorStr]
+		if !ok {
+			ident = j.IdentityFromGitAuthor(ctx, authorStr)
+			otherIdents[authorStr] = ident
+		}
+		idents = append(idents, ident)
+		identTypes = append(identTypes, "committer")
+	}
+	for authorStr, roles := range othersMap {
+		ident, ok := otherIdents[authorStr]
+		if !ok {
+			ident = j.IdentityFromGitAuthor(ctx, authorStr)
+			otherIdents[authorStr] = ident
+		}
+		for roleData := range roles {
+			roleName := roleData[1]
+			idents = append(idents, ident)
+			identTypes = append(identTypes, roleName)
+		}
+	}
+	rich["idents"] = idents
+	rich["ident_types"] = identTypes
+	// FIXME
+	fmt.Printf("identTypes: %+v, idents: %+v\n", identTypes, idents)
 	/*
-		otherIdents := map[string]map[string]interface{}{}
-		rolePH := "{{r}}"
-		for authorStr := range othersMap {
-			ident := j.IdentityFromGitAuthor(ctx, authorStr)
-			identity := map[string]interface{}{
-				"name":               ident[0],
-				"username":           ident[1],
-				"email":              ident[2],
-				rolePH + "_name":     ident[0],
-				rolePH + "_username": ident[1],
-				rolePH + "_email":    ident[2],
-			}
-			otherIdents[authorStr] = identity
-			if !affs {
-				continue
-			}
-			affsIdentity, empty, e := IdentityAffsData(ctx, j, identity, nil, authorDate, rolePH)
-			if e != nil {
-				Printf("AffsItems/IdentityAffsData: error: %v for %v,%v\n", e, identity, authorDate)
-			}
-			if empty {
-				Printf("no identity affiliation data for identity %+v\n", identity)
-				continue
-			}
-			for _, suff := range RequiredAffsFields {
-				k := rolePH + suff
-				_, ok := affsIdentity[k]
-				if !ok {
-					affsIdentity[k] = Unknown
-				}
-			}
-			for prop, value := range affsIdentity {
-				identity[prop] = value
-			}
-			otherIdents[authorStr] = identity
-		}
-		for authorStr, roles := range othersMap {
-			identity, ok := otherIdents[authorStr]
-			if !ok {
-				Printf("Cannot find pre calculated identity data for %s and roles %v\n", authorStr, roles)
-				continue
-			}
-			for roleData := range roles {
-				roleObject := roleData[0]
-				roleName := roleData[1]
-				item := map[string]interface{}{}
-				for prop, value := range identity {
-					if !strings.HasPrefix(prop, rolePH) {
-						continue
-					}
-					prop = strings.Replace(prop, rolePH, roleName, -1)
-					item[prop] = value
-				}
-				_, ok := rich[roleObject]
-				if !ok {
-					rich[roleObject] = []interface{}{item}
-					continue
-				}
-				rich[roleObject] = append(rich[roleObject].([]interface{}), item)
-			}
-		}
-		if affs {
-			authorKey := "Author"
-			var affsItems map[string]interface{}
-			// Note that this uses author date in UTC - I think UTC will be a better option
-			// Original design used TZ date here
-			// If needed replace authorDate with authorDateTz
-			affsItems, err = j.AffsItems(ctx, commit, GitCommitRoles, authorDate)
-			if err != nil {
-				return
-			}
-			for prop, value := range affsItems {
-				rich[prop] = value
-			}
-			for _, suff := range AffsFields {
-				rich[Author+suff] = rich[authorKey+suff]
-			}
-			orgsKey := authorKey + MultiOrgNames
-			_, ok := Dig(rich, []string{orgsKey}, false, true)
-			if !ok {
-				rich[orgsKey] = []interface{}{}
-			}
-		}
-		// Note that this uses author date in UTC - I think UTC will be a better option
-		// Original design used TZ date here
-		// If needed replace authorDate with authorDateTz
-		for prop, value := range CommonFields(j, authorDate, Commit) {
-			rich[prop] = value
-		}
 		if j.PairProgramming {
 			err = j.PairProgrammingMetrics(ctx, rich, commit)
 			if err != nil {
