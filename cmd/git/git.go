@@ -1032,13 +1032,33 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 	for _, iDoc := range docs {
 		doc, _ := iDoc.(map[string]interface{})
 		docUUID, _ := doc["uuid"].(string)
-		// FIXME
-		shared.Printf("%s(%s): rich %+v\n", source, docUUID, doc)
+		// shared.Printf("%s(%s): rich %+v\n", source, docUUID, doc)
 		var updatedOn time.Time
 		// Event
 		/////////////
 		event := &models.Event{
-			Commit: &models.Commit{},
+			Commit: &models.Commit{
+				ID:           docUUID,
+				DataSourceID: source,
+				/*
+				  CommitURL string `json:"CommitURL,omitempty"`
+				  Files []*CommitFileAction `json:"Files"`
+				  HashShort string `json:"HashShort,omitempty"`
+				  IsDoc bool `json:"IsDoc,omitempty"`
+				  IsEmpty bool `json:"IsEmpty,omitempty"`
+				  IsMerge bool `json:"IsMerge,omitempty"`
+				  IsSquashed bool `json:"IsSquashed,omitempty"`
+				  Message *string `json:"Message,omitempty"`
+				  Parents []string `json:"Parents"`
+				  RepositoryShortURL string `json:"RepositoryShortURL,omitempty"`
+				  RepositoryType string `json:"RepositoryType,omitempty"`
+				  RepositoryURL string `json:"RepositoryURL,omitempty"`
+				  Roles []*CommitRole `json:"Roles"`
+				  SHA string `json:"SHA,omitempty"`
+				  Stats *CommitStats `json:"Stats,omitempty"`
+				  Title *string `json:"Title,omitempty"`
+				*/
+			},
 		}
 		/////////////
 		data.Events = append(data.Events, event)

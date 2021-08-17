@@ -118,6 +118,10 @@ definitions:
         type: string
         example: 1234567890abcdef
         description: PK - up to 50 chars
+      DataSourceId:
+        type: string
+        example: git
+        description: data source type slug (FK)
       SHA:
         type: string
         example: 2b20505d9d60202c6779342033d344dba0685d1b
