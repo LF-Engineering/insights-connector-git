@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -54,6 +56,8 @@ const (
 	GitHubURL = "https://github.com/"
 	// GitMaxCommitProperties - maximum properties that can be set on the commit object
 	GitMaxCommitProperties = 1000
+	// GitMaxMsgLength - maximum message length
+	GitMaxMsgLength = 0x4000
 	// GitGenerateFlatDocs - do we want to generate flat commit co-authors docs, like docs with type: commit_co_author, commit_signer etc.?
 	GitGenerateFlatDocs = true
 )
@@ -87,8 +91,10 @@ var (
 	// GitStatsPattern - stats pattern
 	GitStatsPattern = regexp.MustCompile(`^(?P<added>\d+|-)[ \t]+(?P<removed>\d+|-)[ \t]+(?P<file>.+)$`)
 	// GitAuthorsPattern - author pattern
+	// Example: David Woodhouse <dwmw2@infradead.org> and Tilman Schmidt <tilman@imap.cc>
 	GitAuthorsPattern = regexp.MustCompile(`(?P<first_authors>.* .*) and (?P<last_author>.* .*) (?P<email>.*)`)
 	// GitCoAuthorsPattern - author pattern
+	// Example: Co-authored-by: Andi Kleen <ak@suse.de>
 	GitCoAuthorsPattern = regexp.MustCompile(`Co-authored-by:(?P<first_authors>.* .*)<(?P<email>.*)>\n?`)
 	// GitDocFilePattern - files matching this pattern are detected as documentation files, so commit will be marked as doc_commit
 	GitDocFilePattern = regexp.MustCompile(`(?i)(\.md$|\.rst$|\.docx?$|\.txt$|\.pdf$|\.jpe?g$|\.png$|\.svg$|\.img$|^docs/|^documentation/|^readme)`)
@@ -626,13 +632,395 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 	return
 }
 
+// GetCommitURL - return git commit URL for a given path and SHA
+func (j *DSGit) GetCommitURL(origin, hash string) string {
+	if strings.Contains(origin, "github.com") {
+		return origin + "/commit/" + hash
+	} else if strings.Contains(origin, "gitlab.com") {
+		return origin + "/-/commit/" + hash
+	} else if strings.Contains(origin, "bitbucket.org") {
+		return origin + "/commits/" + hash
+	} else if strings.Contains(origin, "gerrit") || strings.Contains(origin, "review") {
+		u, err := url.Parse(origin)
+		if err != nil {
+			shared.Printf("cannot parse git commit origin: '%s'\n", origin)
+			return origin + "/" + hash
+		}
+		baseURL := u.Scheme + "://" + u.Host
+		vURL := "gitweb"
+		if strings.Contains(u.Path, "/gerrit/") {
+			vURL = "gerrit/gitweb"
+		} else if strings.Contains(u.Path, "/r/") {
+			vURL = "r/gitweb"
+		}
+		project := strings.Replace(u.Path, "/gerrit/", "", -1)
+		project = strings.Replace(project, "/r/", "", -1)
+		project = strings.TrimLeft(project, "/")
+		projectURL := "p=" + project + ".git"
+		typeURL := "a=commit"
+		hashURL := "h=" + hash
+		return baseURL + "/" + vURL + "?" + projectURL + ";" + typeURL + ";" + hashURL
+	} else if strings.Contains(origin, "git.") && (!strings.Contains(origin, "gerrit") || !strings.Contains(origin, "review")) {
+		return origin + "/commit/?id=" + hash
+	}
+	return origin + "/" + hash
+}
+
+// GetRepoShortURL - return git commit URL for a given path and SHA
+func (j *DSGit) GetRepoShortURL(origin string) (repoShortName string) {
+	lastSlashItem := func(arg string) string {
+		arg = strings.TrimSuffix(arg, "/")
+		arr := strings.Split(arg, "/")
+		lArr := len(arr)
+		if lArr > 1 {
+			return arr[lArr-1]
+		}
+		return arg
+	}
+	if strings.Contains(origin, "/github.com/") {
+		// https://github.com/org/repo.git --> repo
+		arg := strings.TrimSuffix(origin, ".git")
+		repoShortName = lastSlashItem(arg)
+		return
+	} else if strings.Contains(origin, "/gerrit.") {
+		// https://gerrit.xyz/r/org/repo -> repo
+		repoShortName = lastSlashItem(origin)
+		return
+	} else if strings.Contains(origin, "/gitlab.com") {
+		// https://gitlab.com/org/repo -> repo
+		repoShortName = lastSlashItem(origin)
+		return
+	} else if strings.Contains(origin, "/bitbucket.org/") {
+		// https://bitbucket.org/org/repo.git/src/
+		arg := strings.TrimSuffix(origin, "/")
+		arg = strings.TrimSuffix(arg, "/src")
+		arg = strings.TrimSuffix(arg, ".git")
+		repoShortName = lastSlashItem(arg)
+		return
+	}
+	// Fall back
+	repoShortName = lastSlashItem(origin)
+	return
+}
+
+// GetOtherTrailersAuthors - get others authors - from other trailers fields (mostly for korg)
+// This works on a raw document
+func (j *DSGit) GetOtherTrailersAuthors(ctx *shared.Ctx, doc interface{}) (othersMap map[string]map[[2]string]struct{}) {
+	// "Signed-off-by":  {"authors_signed", "signer"},
+	commitAuthor := ""
+	for otherKey, otherRichKey := range GitTrailerOtherAuthors {
+		iothers, ok := shared.Dig(doc, []string{"data", otherKey}, false, true)
+		if ok {
+			sameAsAuthorAllowed, _ := GitTrailerSameAsAuthor[otherKey]
+			if !sameAsAuthorAllowed {
+				if commitAuthor == "" {
+					iCommitAuthor, _ := shared.Dig(doc, []string{"data", "Author"}, true, false)
+					commitAuthor = strings.TrimSpace(iCommitAuthor.(string))
+					if ctx.Debug > 1 {
+						shared.Printf("trailers type %s cannot have the same authors as commit's author %s, checking this\n", otherKey, commitAuthor)
+					}
+				}
+			}
+			others, _ := iothers.([]interface{})
+			if ctx.Debug > 1 {
+				shared.Printf("other trailers %s -> %s: %s\n", otherKey, otherRichKey, others)
+			}
+			if othersMap == nil {
+				othersMap = make(map[string]map[[2]string]struct{})
+			}
+			for _, iOther := range others {
+				other := strings.TrimSpace(iOther.(string))
+				if !sameAsAuthorAllowed && other == commitAuthor {
+					if ctx.Debug > 1 {
+						shared.Printf("trailer %s is the same as commit's author, and this isn't allowed for %s trailers, skipping\n", other, otherKey)
+					}
+					continue
+				}
+				_, ok := othersMap[other]
+				if !ok {
+					othersMap[other] = map[[2]string]struct{}{}
+				}
+				othersMap[other][otherRichKey] = struct{}{}
+			}
+		}
+	}
+	return
+}
+
 // EnrichItem - return rich item from raw item for a given author type
 func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich map[string]interface{}, err error) {
-	// FIXME
-	jsonBytes, _ := jsoniter.Marshal(item)
-	shared.Printf("EnrichItem: %s\n", string(jsonBytes))
-	// FIXME
+	// authors, committers, co_authors, authors_signed_off
+	// jsonBytes, _ := jsoniter.Marshal(item["data"].(map[string]interface{})["authors"])
+	// shared.Printf("EnrichItem: authors: %+v\n", string(jsonBytes))
 	rich = make(map[string]interface{})
+	for _, field := range shared.RawFields {
+		v, _ := item[field]
+		rich[field] = v
+	}
+	commit, ok := item["data"].(map[string]interface{})
+	if !ok {
+		err = fmt.Errorf("missing data field in item %+v", shared.DumpKeys(item))
+		return
+	}
+	fmt.Printf("EnrichItem: commit=%+v\n", commit)
+	iAuthorDate, _ := shared.Dig(commit, []string{"AuthorDate"}, true, false)
+	sAuthorDate, _ := iAuthorDate.(string)
+	authorDate, authorDateTz, authorTz, ok := shared.ParseDateWithTz(sAuthorDate)
+	if !ok {
+		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
+		return
+	}
+	rich["orphaned"] = false
+	rich["tz"] = authorTz
+	rich["author_date"] = authorDateTz
+	rich["author_date_weekday"] = int(authorDateTz.Weekday())
+	rich["author_date_hour"] = authorDateTz.Hour()
+	rich["utc_author"] = authorDate
+	rich["utc_author_date_weekday"] = int(authorDate.Weekday())
+	rich["utc_author_date_hour"] = authorDate.Hour()
+	iCommitDate, _ := shared.Dig(commit, []string{"CommitDate"}, true, false)
+	sCommitDate, _ := iCommitDate.(string)
+	commitDate, commitDateTz, commitTz, ok := shared.ParseDateWithTz(sCommitDate)
+	if !ok {
+		err = fmt.Errorf("cannot parse commit date from %v", iAuthorDate)
+		return
+	}
+	rich["commit_tz"] = commitTz
+	rich["commit_date"] = commitDateTz
+	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
+	rich["commit_date_hour"] = commitDateTz.Hour()
+	rich["utc_commit"] = commitDate
+	rich["utc_commit_date_weekday"] = int(commitDate.Weekday())
+	rich["utc_commit_date_hour"] = commitDate.Hour()
+	message, ok := shared.Dig(commit, []string{"message"}, false, true)
+	if ok {
+		msg, _ := message.(string)
+		ary := strings.Split(msg, "\n")
+		rich["title"] = ary[0]
+		rich["message_analyzed"] = msg
+		if len(msg) > GitMaxMsgLength {
+			msg = msg[:GitMaxMsgLength]
+		}
+		rich["message"] = msg
+	} else {
+		rich["message_analyzed"] = nil
+		rich["message"] = nil
+	}
+	comm, ok := shared.Dig(commit, []string{"commit"}, false, true)
+	var hsh string
+	if ok {
+		hsh, _ = comm.(string)
+		rich["hash"] = hsh
+		rich["hash_short"] = hsh[:6]
+	} else {
+		rich["hash"] = nil
+	}
+	iRefs, ok := shared.Dig(commit, []string{"refs"}, false, true)
+	if ok {
+		refsAry, ok := iRefs.([]interface{})
+		if ok {
+			tags := []string{}
+			for _, iRef := range refsAry {
+				ref, _ := iRef.(string)
+				if strings.Contains(ref, "tag: ") {
+					tags = append(tags, ref)
+				}
+			}
+			rich["commit_tags"] = tags
+		}
+	}
+
+	rich["branches"] = []interface{}{}
+	dtDiff := float64(commitDate.Sub(authorDate).Seconds()) / 3600.0
+	dtDiff = math.Round(dtDiff*100.0) / 100.0
+	rich["time_to_commit_hours"] = dtDiff
+	iRepoName, _ := shared.Dig(item, []string{"origin"}, true, false)
+	repoName, _ := iRepoName.(string)
+	origin := repoName
+	if strings.HasPrefix(repoName, "http") {
+		repoName = shared.AnonymizeURL(repoName)
+	}
+	rich["repo_name"] = repoName
+	nFiles := 0
+	linesAdded := 0
+	linesRemoved := 0
+	fileData := []map[string]interface{}{}
+	iFiles, ok := shared.Dig(commit, []string{"files"}, false, true)
+	if ok {
+		files, ok := iFiles.([]interface{})
+		if ok {
+			for _, file := range files {
+				action, ok := shared.Dig(file, []string{"action"}, false, true)
+				if !ok {
+					continue
+				}
+				nFiles++
+				iAdded, ok := shared.Dig(file, []string{"added"}, false, true)
+				added, removed, name := 0, 0, ""
+				if ok {
+					added, _ = strconv.Atoi(fmt.Sprintf("%v", iAdded))
+					linesAdded += added
+				}
+				iRemoved, ok := shared.Dig(file, []string{"removed"}, false, true)
+				if ok {
+					//removed, _ := iRemoved.(float64)
+					removed, _ = strconv.Atoi(fmt.Sprintf("%v", iRemoved))
+					linesRemoved += int(removed)
+				}
+				iName, ok := shared.Dig(file, []string{"file"}, false, true)
+				if ok {
+					name, _ = iName.(string)
+				}
+				fileData = append(
+					fileData,
+					map[string]interface{}{
+						"action":  action,
+						"name":    name,
+						"added":   added,
+						"removed": removed,
+					},
+				)
+			}
+		}
+	}
+	rich["file_data"] = fileData
+	rich["files"] = nFiles
+	rich["lines_added"] = linesAdded
+	rich["lines_removed"] = linesRemoved
+	rich["lines_changed"] = linesAdded + linesRemoved
+	doc, _ := shared.Dig(commit, []string{"doc_commit"}, false, true)
+	rich["doc_commit"] = doc
+	loc, ok := shared.Dig(commit, []string{"total_lines_of_code"}, false, true)
+	if ok {
+		rich["total_lines_of_code"] = loc
+	} else {
+		rich["total_lines_of_code"] = 0
+	}
+	pls, ok := shared.Dig(commit, []string{"program_language_summary"}, false, true)
+	if ok {
+		rich["program_language_summary"] = pls
+	} else {
+		rich["program_language_summary"] = []interface{}{}
+	}
+	rich["commit_url"] = j.GetCommitURL(origin, hsh)
+	rich["repo_short_name"] = j.GetRepoShortURL(origin)
+	// Printf("commit_url: %+v\n", rich["commit_url"])
+	project, ok := shared.Dig(commit, []string{"project"}, false, true)
+	if ok {
+		rich["project"] = project
+	}
+	if strings.Contains(origin, GitHubURL) {
+		githubRepo := strings.Replace(origin, GitHubURL, "", -1)
+		githubRepo = strings.TrimSuffix(githubRepo, ".git")
+		rich["github_repo"] = githubRepo
+		rich["url_id"] = githubRepo + "/commit/" + hsh
+	}
+	othersMap := j.GetOtherTrailersAuthors(ctx, item)
+	// FIXME: richOthersMap
+	fmt.Printf("richOthersMap: %+v\n", othersMap)
+	/*
+		otherIdents := map[string]map[string]interface{}{}
+		rolePH := "{{r}}"
+		for authorStr := range othersMap {
+			ident := j.IdentityFromGitAuthor(ctx, authorStr)
+			identity := map[string]interface{}{
+				"name":               ident[0],
+				"username":           ident[1],
+				"email":              ident[2],
+				rolePH + "_name":     ident[0],
+				rolePH + "_username": ident[1],
+				rolePH + "_email":    ident[2],
+			}
+			otherIdents[authorStr] = identity
+			if !affs {
+				continue
+			}
+			affsIdentity, empty, e := IdentityAffsData(ctx, j, identity, nil, authorDate, rolePH)
+			if e != nil {
+				Printf("AffsItems/IdentityAffsData: error: %v for %v,%v\n", e, identity, authorDate)
+			}
+			if empty {
+				Printf("no identity affiliation data for identity %+v\n", identity)
+				continue
+			}
+			for _, suff := range RequiredAffsFields {
+				k := rolePH + suff
+				_, ok := affsIdentity[k]
+				if !ok {
+					affsIdentity[k] = Unknown
+				}
+			}
+			for prop, value := range affsIdentity {
+				identity[prop] = value
+			}
+			otherIdents[authorStr] = identity
+		}
+		for authorStr, roles := range othersMap {
+			identity, ok := otherIdents[authorStr]
+			if !ok {
+				Printf("Cannot find pre calculated identity data for %s and roles %v\n", authorStr, roles)
+				continue
+			}
+			for roleData := range roles {
+				roleObject := roleData[0]
+				roleName := roleData[1]
+				item := map[string]interface{}{}
+				for prop, value := range identity {
+					if !strings.HasPrefix(prop, rolePH) {
+						continue
+					}
+					prop = strings.Replace(prop, rolePH, roleName, -1)
+					item[prop] = value
+				}
+				_, ok := rich[roleObject]
+				if !ok {
+					rich[roleObject] = []interface{}{item}
+					continue
+				}
+				rich[roleObject] = append(rich[roleObject].([]interface{}), item)
+			}
+		}
+		if affs {
+			authorKey := "Author"
+			var affsItems map[string]interface{}
+			// Note that this uses author date in UTC - I think UTC will be a better option
+			// Original design used TZ date here
+			// If needed replace authorDate with authorDateTz
+			affsItems, err = j.AffsItems(ctx, commit, GitCommitRoles, authorDate)
+			if err != nil {
+				return
+			}
+			for prop, value := range affsItems {
+				rich[prop] = value
+			}
+			for _, suff := range AffsFields {
+				rich[Author+suff] = rich[authorKey+suff]
+			}
+			orgsKey := authorKey + MultiOrgNames
+			_, ok := Dig(rich, []string{orgsKey}, false, true)
+			if !ok {
+				rich[orgsKey] = []interface{}{}
+			}
+		}
+		// Note that this uses author date in UTC - I think UTC will be a better option
+		// Original design used TZ date here
+		// If needed replace authorDate with authorDateTz
+		for prop, value := range CommonFields(j, authorDate, Commit) {
+			rich[prop] = value
+		}
+		if j.PairProgramming {
+			err = j.PairProgrammingMetrics(ctx, rich, commit)
+			if err != nil {
+				Printf("error calculating pair programming metrics: %+v\n", err)
+				return
+			}
+		}
+		rich["origin"] = shared.AnonymizeURL(rich["origin"].(string))
+		rich["tag"] = shared.AnonymizeURL(rich["tag"].(string))
+		rich["commit_url"] = shared.AnonymizeURL(rich["commit_url"].(string))
+		rich["git_author_domain"] = rich["author_domain"]
+		rich["type"] = Commit
+	*/
 	// NOTE: From shared
 	rich["metadata__enriched_on"] = time.Now()
 	// rich[ProjectSlug] = ctx.ProjectSlug
@@ -640,8 +1028,8 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	return
 }
 
-// EnrichPairProgrammingItem - additional operations on already enriched item for pair programming
-func (j *DSGit) EnrichPairProgrammingItem(richItem map[string]interface{}) (err error) {
+// SetParentCommitFlag - additional operations on already enriched item for pair programming
+func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error) {
 	var repoString string
 	if repo, ok := richItem["repo_name"]; ok {
 		repoString = fmt.Sprintf("%+v", repo)
@@ -675,7 +1063,9 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 		doc, _ := iDoc.(map[string]interface{})
 		// Event
 		// FIXME
-		shared.Printf("%s: %+v\n", source, doc)
+		if 1 == 0 {
+			shared.Printf("%s: %+v\n", source, doc)
+		}
 		var updatedOn time.Time
 		event := &models.Event{}
 		data.Events = append(data.Events, event)
@@ -1062,6 +1452,8 @@ func (j *DSGit) TrailerDocs(ctx *shared.Ctx, rich map[string]interface{}) (trail
 		aryName := data[0]
 		authorName := data[1]
 		iAry, ok := rich[aryName]
+		// FIXME:
+		fmt.Printf("TrailerDocs: (%s,%s,%+v,%v)\n", aryName, authorName, iAry, ok)
 		if ok {
 			ary, _ := iAry.([]interface{})
 			for _, iItem := range ary {
@@ -1141,7 +1533,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			data, _ := idata.(map[string]interface{})
 			data["Author-Original"] = data["Author"]
 			authorsMap, firstAuthor := j.GetAuthorsData(ctx, doc, "Author")
-			if len(authorsMap) > 1 {
+			if len(authorsMap) > 0 {
 				authors := []string{}
 				for auth := range authorsMap {
 					authors = append(authors, auth)
@@ -1150,7 +1542,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				data["Author"] = firstAuthor
 			}
 			committersMap, firstCommitter := j.GetAuthorsData(ctx, doc, "Commit")
-			if len(committersMap) > 1 {
+			if len(committersMap) > 0 {
 				committers := []string{}
 				for committer := range committersMap {
 					committers = append(committers, committer)
@@ -1166,6 +1558,8 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				coAuthors []string
 			)
 			othersMap := j.GetOtherPPAuthors(ctx, doc)
+			// FIXME:
+			fmt.Printf("authorsMap=%+v, committersMap=%+v, othersMap=%+v\n", authorsMap, committersMap, othersMap)
 			if len(othersMap) > 0 {
 				// V2: we assume first author is signer & co-author - but maybe not in V2 mode?
 				// signers = []string{firstAuthor}
@@ -1363,7 +1757,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			if thrN > 1 {
 				mtx.Lock()
 			}
-			e = j.EnrichPairProgrammingItem(rich.(map[string]interface{}))
+			e = j.SetParentCommitFlag(rich.(map[string]interface{}))
 			if e != nil {
 				if thrN > 1 {
 					mtx.Unlock()
