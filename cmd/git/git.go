@@ -639,18 +639,18 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 }
 
 // GetCommitURL - return git commit URL for a given path and SHA
-func (j *DSGit) GetCommitURL(origin, hash string) string {
+func (j *DSGit) GetCommitURL(origin, hash string) (string, string) {
 	if strings.Contains(origin, "github.com") {
-		return origin + "/commit/" + hash
+		return origin + "/commit/" + hash, "github"
 	} else if strings.Contains(origin, "gitlab.com") {
-		return origin + "/-/commit/" + hash
+		return origin + "/-/commit/" + hash, "gitlab"
 	} else if strings.Contains(origin, "bitbucket.org") {
-		return origin + "/commits/" + hash
+		return origin + "/commits/" + hash, "bitbucket"
 	} else if strings.Contains(origin, "gerrit") || strings.Contains(origin, "review") {
 		u, err := url.Parse(origin)
 		if err != nil {
 			shared.Printf("cannot parse git commit origin: '%s'\n", origin)
-			return origin + "/" + hash
+			return origin + "/" + hash, "unknown"
 		}
 		baseURL := u.Scheme + "://" + u.Host
 		vURL := "gitweb"
@@ -665,11 +665,11 @@ func (j *DSGit) GetCommitURL(origin, hash string) string {
 		projectURL := "p=" + project + ".git"
 		typeURL := "a=commit"
 		hashURL := "h=" + hash
-		return baseURL + "/" + vURL + "?" + projectURL + ";" + typeURL + ";" + hashURL
+		return baseURL + "/" + vURL + "?" + projectURL + ";" + typeURL + ";" + hashURL, "gerrit"
 	} else if strings.Contains(origin, "git.") && (!strings.Contains(origin, "gerrit") || !strings.Contains(origin, "review")) {
-		return origin + "/commit/?id=" + hash
+		return origin + "/commit/?id=" + hash, "unknown"
 	}
-	return origin + "/" + hash
+	return origin + "/" + hash, "unknown"
 }
 
 // GetRepoShortURL - return git commit URL for a given path and SHA
@@ -844,7 +844,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 			rich["commit_tags"] = tags
 		}
 	}
-
+	rich["parents"], _ = commit["parents"]
 	rich["branches"] = []interface{}{}
 	dtDiff := float64(commitDate.Sub(authorDate).Seconds()) / 3600.0
 	dtDiff = math.Round(dtDiff*100.0) / 100.0
@@ -919,7 +919,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	} else {
 		rich["program_language_summary"] = []interface{}{}
 	}
-	rich["commit_url"] = j.GetCommitURL(origin, hsh)
+	rich["commit_url"], rich["commit_repo_type"] = j.GetCommitURL(origin, hsh)
 	rich["repo_short_name"] = j.GetRepoShortURL(origin)
 	// Printf("commit_url: %+v\n", rich["commit_url"])
 	project, ok := shared.Dig(commit, []string{"project"}, false, true)
@@ -1033,47 +1033,106 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 	}
 	source := data.DataSource.Slug
 	for _, iDoc := range docs {
+		var (
+			message *string
+			title   *string
+		)
 		doc, _ := iDoc.(map[string]interface{})
 		docUUID, _ := doc["uuid"].(string)
 		commitURL, _ := doc["commit_url"].(string)
+		commitRepoType, _ := doc["commit_repo_type"].(string)
 		sha, _ := doc["hash"].(string)
 		hashShort, _ := doc["hash_short"].(string)
+		sMessage, _ := doc["message"].(string)
+		sTitle, _ := doc["title"].(string)
+		repoShortURL, _ := doc["repo_short_name"].(string)
 		docCommit, _ := doc["doc_commit"].(bool)
 		emptyCommit, _ := doc["empty_commit"].(bool)
 		_, squashedCommit := j.OrphanedMap["sha"]
-		// shared.Printf("%s(%s): rich %+v\n", source, docUUID, doc)
-		var updatedOn time.Time
+		if sMessage != "" {
+			message = &sMessage
+		}
+		if sTitle != "" {
+			title = &sTitle
+		}
+		parents, _ := doc["parents"].([]string)
+		authoredInTz, _ := doc["author_date"].(time.Time)
+		authoredDt, _ := doc["utc_author"].(time.Time)
+		authoredTz, _ := doc["tz"].(float64)
+		committedInTz, _ := doc["commit_date"].(time.Time)
+		committedDt, _ := doc["utc_commit"].(time.Time)
+		committedTz, _ := doc["commit_tz"].(float64)
+		createdOn := authoredDt
+		commitRoles := []*models.CommitRole{}
+		identsAry, okIdents := doc["idents"].([][3]string)
+		identTypesAry, okIdentTypes := doc["ident_types"].([]string)
+		if okIdents && okIdentTypes {
+			for i := range identTypesAry {
+				var (
+					dt     time.Time
+					dtInTz time.Time
+					tz     float64
+				)
+				ident := identsAry[i]
+				identType := identTypesAry[i]
+				if identType == "committer" {
+					dt = committedDt
+					dtInTz = committedInTz
+					tz = committedTz
+				} else {
+					dt = authoredDt
+					dtInTz = authoredInTz
+					tz = authoredTz
+				}
+				name := ident[0]
+				username := ""
+				email := ident[2]
+				name, username = shared.PostprocessNameUsername(name, username, email)
+				userUUID := shared.UUIDAffs(ctx, source, email, name, username)
+				identity := &models.Identity{
+					ID:           userUUID,
+					DataSourceID: source,
+					Name:         name,
+					Username:     username,
+				}
+				commitRoleUUID := shared.UUIDNonEmpty(ctx, docUUID, fmt.Sprintf("%s-%d", identType, i), userUUID)
+				commitRole := &models.CommitRole{
+					ID:       commitRoleUUID,
+					Name:     identType,
+					User:     identity,
+					Weight:   1.0,
+					When:     strfmt.DateTime(dt),
+					WhenInTz: strfmt.DateTime(dtInTz),
+					WhenTz:   tz,
+				}
+				commitRoles = append(commitRoles, commitRole)
+			}
+		}
 		// Event
-		/////////////
 		event := &models.Event{
 			Commit: &models.Commit{
-				ID:           docUUID,
-				DataSourceID: source,
-				CommitURL:    commitURL,
-				SHA:          sha,
-				HashShort:    hashShort,
-				IsDoc:        docCommit,
-				IsEmpty:      emptyCommit,
-				IsSquashed:   squashedCommit,
-				/*
-				  Files []*CommitFileAction `json:"Files"`
-				  IsSquashed bool `json:"IsSquashed,omitempty"`
-				  Message *string `json:"Message,omitempty"`
-				  Parents []string `json:"Parents"`
-				  RepositoryShortURL string `json:"RepositoryShortURL,omitempty"`
-				  RepositoryType string `json:"RepositoryType,omitempty"`
-				  RepositoryURL string `json:"RepositoryURL,omitempty"`
-				  Roles []*CommitRole `json:"Roles"`
-				  Stats *CommitStats `json:"Stats,omitempty"`
-				  Title *string `json:"Title,omitempty"`
-				*/
+				ID:                 docUUID,
+				DataSourceID:       source,
+				CommitURL:          commitURL,
+				SHA:                sha,
+				HashShort:          hashShort,
+				IsDoc:              docCommit,
+				IsEmpty:            emptyCommit,
+				IsSquashed:         squashedCommit,
+				Message:            message,
+				Title:              title,
+				RepositoryShortURL: repoShortURL,
+				RepositoryType:     commitRepoType,
+				RepositoryURL:      j.URL,
+				Parents:            parents,
+				Roles:              commitRoles,
+				// Files []*CommitFileAction `json:"Files"`
 			},
 		}
-		/////////////
 		data.Events = append(data.Events, event)
 		gMaxUpstreamDtMtx.Lock()
-		if updatedOn.After(gMaxUpstreamDt) {
-			gMaxUpstreamDt = updatedOn
+		if createdOn.After(gMaxUpstreamDt) {
+			gMaxUpstreamDt = createdOn
 		}
 		gMaxUpstreamDtMtx.Unlock()
 	}
