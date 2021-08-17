@@ -857,12 +857,12 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	}
 	rich["repo_name"] = repoName
 	nFiles := 0
-	linesAdded := 0
-	linesRemoved := 0
+	linesAdded := int64(0)
+	linesRemoved := int64(0)
 	fileData := []map[string]interface{}{}
 	iFiles, ok := shared.Dig(commit, []string{"files"}, false, true)
 	if ok {
-		files, ok := iFiles.([]interface{})
+		files, ok := iFiles.([]map[string]interface{})
 		if ok {
 			for _, file := range files {
 				action, ok := shared.Dig(file, []string{"action"}, false, true)
@@ -874,13 +874,13 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 				added, removed, name := 0, 0, ""
 				if ok {
 					added, _ = strconv.Atoi(fmt.Sprintf("%v", iAdded))
-					linesAdded += added
+					linesAdded += int64(added)
 				}
 				iRemoved, ok := shared.Dig(file, []string{"removed"}, false, true)
 				if ok {
 					//removed, _ := iRemoved.(float64)
 					removed, _ = strconv.Atoi(fmt.Sprintf("%v", iRemoved))
-					linesRemoved += int(removed)
+					linesRemoved += int64(removed)
 				}
 				iName, ok := shared.Dig(file, []string{"file"}, false, true)
 				if ok {
@@ -1048,6 +1048,9 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 		repoShortURL, _ := doc["repo_short_name"].(string)
 		docCommit, _ := doc["doc_commit"].(bool)
 		emptyCommit, _ := doc["empty_commit"].(bool)
+		locAdded, _ := doc["lines_added"].(int64)
+		locRemoved, _ := doc["lines_removed"].(int64)
+		locChanged, _ := doc["lines_changed"].(int64)
 		_, squashedCommit := j.OrphanedMap["sha"]
 		if sMessage != "" {
 			message = &sMessage
@@ -1108,6 +1111,41 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 				commitRoles = append(commitRoles, commitRole)
 			}
 		}
+		files := []*models.CommitFileAction{}
+		fileAry, okFileAry := doc["file_data"].([]map[string]interface{})
+		if okFileAry {
+			for _, fileData := range fileAry {
+				var (
+					pAdded   *int64
+					pRemoved *int64
+					pChanged *int64
+				)
+				action, _ := fileData["action"].(string)
+				name, _ := fileData["name"].(string)
+				iAdded, _ := fileData["added"].(int)
+				iRemoved, _ := fileData["removed"].(int)
+				added := int64(iAdded)
+				removed := int64(iRemoved)
+				if added > 0 {
+					pAdded = &added
+				}
+				if removed > 0 {
+					pRemoved = &removed
+				}
+				changed := added + removed
+				if changed > 0 {
+					pChanged = &changed
+				}
+				file := &models.CommitFileAction{
+					Action:  action,
+					Name:    name,
+					Added:   pAdded,
+					Removed: pRemoved,
+					Changed: pChanged,
+				}
+				files = append(files, file)
+			}
+		}
 		// Event
 		event := &models.Event{
 			Commit: &models.Commit{
@@ -1126,7 +1164,12 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.
 				RepositoryURL:      j.URL,
 				Parents:            parents,
 				Roles:              commitRoles,
-				// Files []*CommitFileAction `json:"Files"`
+				Files:              files,
+				Stats: &models.CommitStats{
+					LinesAdded:   locAdded,
+					LinesRemoved: locRemoved,
+					LinesChanged: locChanged,
+				},
 			},
 		}
 		data.Events = append(data.Events, event)

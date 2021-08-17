@@ -73,6 +73,10 @@ definitions:
         type: integer
         x-nullable: true
         example: 4
+      Changed:
+        type: integer
+        x-nullable: true
+        example: 10
   CommitRole:
     type: object
     properties:
