@@ -482,7 +482,7 @@ var (
 	gMaxUpstreamDt    time.Time
 	gMaxUpstreamDtMtx = &sync.Mutex{}
 	// GitDataSource - constant
-	GitDataSource = &models.DataSource{Name: "git", Slug: "git"}
+	GitDataSource = &models.DataSource{Name: "git", Slug: "git", Model: "commits"}
 	gGitMetaData  = &models.MetaData{BackendName: "git", BackendVersion: GitBackendVersion}
 )
 

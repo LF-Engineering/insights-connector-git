@@ -21,6 +21,9 @@ definitions:
       Name:
         type: string
         example: git
+      Model:
+        type: string
+        example: commits
   MetaData:
     type: object
     properties:
