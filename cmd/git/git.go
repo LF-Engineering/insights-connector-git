@@ -762,6 +762,13 @@ func (j *DSGit) IdentityFromGitAuthor(ctx *shared.Ctx, author string) (identity 
 		fields2 := strings.Split(fields[1], ">")
 		email = strings.TrimSpace(fields2[0])
 	}
+	// We don't attempt to transform email in anyw ay in V2, we just check if this is a correct email (not even checking the domain)
+	if email != "" {
+		valid, _ := shared.IsValidEmail(email, false, false)
+		if !valid {
+			email = ""
+		}
+	}
 	identity = [3]string{name, "", email}
 	return
 }
