@@ -1035,11 +1035,11 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 		commit := insights.Commit{}
 		commit.Connector = "git"
 		commit.ConnectorVersion = GitBackendVersion
-		commit.Source = source.Name
 		doc, _ := iDoc.(map[string]interface{})
 		commit.URL, _ = doc["commit_url"].(string)
 		commit.SHA, _ = doc["hash"].(string)
 		commit.ShortHash, _ = doc["hash_short"].(string)
+		commit.Source = doc["commit_repo_type"].(string)
 		commit.Message, _ = doc["message"].(string)
 		_, commit.MergeCommit = j.OrphanedMap["sha"]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
