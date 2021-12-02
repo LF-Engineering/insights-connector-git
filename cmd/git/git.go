@@ -33,12 +33,12 @@ const (
 	// GitDefaultCachePath - default path where gitops cache files are stored
 	GitDefaultCachePath = "/tmp/git-cache"
 	// GitOpsCommand - command that maintains git stats cache
-	GitOpsCommand = "./gitops.py"
 	// GitOpsCommand = "gitops"
+	GitOpsCommand = "gitops"
 	// GitOpsFailureFatal - is GitOpsCommand failure fatal?
 	GitOpsFailureFatal = true
 	// OrphanedCommitsCommand - command to list orphaned commits
-	OrphanedCommitsCommand = "./detect-removed-commits.sh"
+	OrphanedCommitsCommand = "detect-removed-commits.sh"
 	// OrphanedCommitsFailureFatal - is OrphanedCommitsCommand failure fatal?
 	OrphanedCommitsFailureFatal = true
 	// GitParseStateInit - init parser state
