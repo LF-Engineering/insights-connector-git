@@ -33,7 +33,7 @@ const (
 	// GitDefaultCachePath - default path where gitops cache files are stored
 	GitDefaultCachePath = "/tmp/git-cache"
 	// GitOpsCommand - command that maintains git stats cache
-	// GitOpsCommand = "gitops"
+	// GitOpsCommand = "gitops.py"
 	GitOpsCommand = "gitops"
 	// GitOpsFailureFatal - is GitOpsCommand failure fatal?
 	GitOpsFailureFatal = true
