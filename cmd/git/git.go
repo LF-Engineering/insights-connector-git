@@ -17,10 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LF-Engineering/insights-datasource-git/gen/models"
-	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
-	"github.com/go-openapi/strfmt"
+	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	jsoniter "github.com/json-iterator/go"
 	// jsoniter "github.com/json-iterator/go"
 )
@@ -483,9 +481,6 @@ var (
 	// max upstream date
 	gMaxUpstreamDt    time.Time
 	gMaxUpstreamDtMtx = &sync.Mutex{}
-	// GitDataSource - constant
-	GitDataSource = &models.DataSource{Name: "git", Slug: "git", Model: "commits"}
-	gGitMetaData  = &models.MetaData{BackendName: "git", BackendVersion: GitBackendVersion}
 )
 
 // RawPLS - programming language summary (all fields as strings)
@@ -535,8 +530,6 @@ type DSGit struct {
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
 	CommitsHash map[string]map[string]struct{}
-	// ModelPLS - store PLS data
-	ModelPLS []*models.LanguageStats
 }
 
 // AddFlags - add git specific flags
@@ -590,9 +583,6 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	j.CommitsHash = make(map[string]map[string]struct{})
 	j.OrphanedMap = make(map[string]struct{})
 
-	// NOTE: don't forget this
-	gGitMetaData.Project = ctx.Project
-	gGitMetaData.Tags = ctx.Tags
 	return
 }
 
@@ -634,7 +624,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		return
 	}
 	if ctx.Debug > 1 {
-		m := &models.Data{}
+		m := &insights.Commit{}
 		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
 	}
 	return
@@ -1030,7 +1020,6 @@ func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error)
 // GetModelData - return data in swagger format
 func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Commit {
 	data := make([]insights.Commit, 0)
-	source := GitDataSource
 	for _, iDoc := range docs {
 		commit := insights.Commit{}
 		commit.Connector = "git"
@@ -1041,13 +1030,12 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 		commit.ShortHash, _ = doc["hash_short"].(string)
 		commit.Source = doc["commit_repo_type"].(string)
 		commit.Message, _ = doc["message"].(string)
-		_, commit.MergeCommit = j.OrphanedMap["sha"]
+		_, commit.Orphaned = j.OrphanedMap["sha"]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
 		createdOn := authoredDt
-		commit.Orphaned = doc["orphaned"].(bool)
 		commit.SyncTimestamp = time.Now()
 		commitRoles := []insights.Contributor{}
 		identsAry, okIdents := doc["idents"].([][3]string)
@@ -1063,16 +1051,12 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 				username := ""
 				email := ident[2]
 				name, username = shared.PostprocessNameUsername(name, username, email)
-				nameList := strings.Split(name, "")
 				commitRole.Identity = user.UserIdentity{
 					Email:      email,
-					FirstName:  nameList[0],
+					FirstName:  name,
 					IsVerified: false,
 					Username:   username,
-					Source:     source.Slug,
-				}
-				if len(nameList) > 1 {
-					commitRole.Identity.LastName = strings.Join(nameList[1:], " ")
+					Source:     commit.Source,
 				}
 				commitRoles = append(commitRoles, commitRole)
 			}
@@ -1086,6 +1070,14 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 				file := insights.CommitFilesByType{}
 				file.LinesAdded = strconv.Itoa(fileData["added"].(int))
 				file.LinesRemoved = strconv.Itoa(fileData["removed"].(int))
+				action, _ := fileData["action"].(string)
+				if action == "M" {
+					file.FilesModified++
+				} else if action == "D" {
+					file.FilesDeleted++
+				} else {
+					file.FilesCreated++
+				}
 				files = append(files, file)
 			}
 		}
@@ -1216,16 +1208,6 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 					Code:     code,
 				},
 			)
-		}
-		for _, item := range j.Pls {
-			j.ModelPLS = append(j.ModelPLS, &models.LanguageStats{
-				CalculatedAt: strfmt.DateTime(j.StatsDt),
-				Language:     item.Language,
-				Blank:        int64(item.Blank),
-				Code:         int64(item.Code),
-				Comment:      int64(item.Comment),
-				Files:        int64(item.Files),
-			})
 		}
 		return
 	}
@@ -1753,6 +1735,7 @@ func (j *DSGit) ParseFile(ctx *shared.Ctx, line string) (parsed, empty bool, err
 	}
 	m = shared.MatchGroups(GitStatsPattern, line)
 	if len(m) > 0 {
+		
 		j.ParseStats(ctx, m)
 		parsed = true
 		return
