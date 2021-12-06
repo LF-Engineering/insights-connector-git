@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/lfx-event-schema/service/user"
 	"io"
 	"math"
 	"net/url"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/LF-Engineering/lfx-event-schema/service/user"
 
 	shared "github.com/LF-Engineering/insights-datasource-shared"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
@@ -1028,7 +1029,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 		commit.URL, _ = doc["commit_url"].(string)
 		commit.SHA, _ = doc["hash"].(string)
 		commit.ShortHash, _ = doc["hash_short"].(string)
-		commit.Source = doc["commit_repo_type"].(string)
+		commit.Source, _ = doc["commit_repo_type"].(string)
 		commit.Message, _ = doc["message"].(string)
 		_, commit.Orphaned = j.OrphanedMap["sha"]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
@@ -1735,7 +1736,7 @@ func (j *DSGit) ParseFile(ctx *shared.Ctx, line string) (parsed, empty bool, err
 	}
 	m = shared.MatchGroups(GitStatsPattern, line)
 	if len(m) > 0 {
-		
+
 		j.ParseStats(ctx, m)
 		parsed = true
 		return
