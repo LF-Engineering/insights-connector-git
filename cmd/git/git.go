@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/lfx-event-schema/service/user"
 	"io"
 	"math"
 	"net/url"
@@ -16,9 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LF-Engineering/insights-datasource-git/gen/models"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
-	"github.com/go-openapi/strfmt"
+	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	jsoniter "github.com/json-iterator/go"
 	// jsoniter "github.com/json-iterator/go"
 )
@@ -481,9 +481,6 @@ var (
 	// max upstream date
 	gMaxUpstreamDt    time.Time
 	gMaxUpstreamDtMtx = &sync.Mutex{}
-	// GitDataSource - constant
-	GitDataSource = &models.DataSource{Name: "git", Slug: "git", Model: "commits"}
-	gGitMetaData  = &models.MetaData{BackendName: "git", BackendVersion: GitBackendVersion}
 )
 
 // RawPLS - programming language summary (all fields as strings)
@@ -533,8 +530,6 @@ type DSGit struct {
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
 	CommitsHash map[string]map[string]struct{}
-	// ModelPLS - store PLS data
-	ModelPLS []*models.LanguageStats
 }
 
 // AddFlags - add git specific flags
@@ -588,9 +583,6 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	j.CommitsHash = make(map[string]map[string]struct{})
 	j.OrphanedMap = make(map[string]struct{})
 
-	// NOTE: don't forget this
-	gGitMetaData.Project = ctx.Project
-	gGitMetaData.Tags = ctx.Tags
 	return
 }
 
@@ -632,7 +624,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		return
 	}
 	if ctx.Debug > 1 {
-		m := &models.Data{}
+		m := &insights.Commit{}
 		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
 	}
 	return
@@ -1026,167 +1018,78 @@ func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error)
 }
 
 // GetModelData - return data in swagger format
-func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) (data *models.Data) {
-	data = &models.Data{
-		DataSource: GitDataSource,
-		MetaData:   gGitMetaData,
-		Endpoint:   j.URL,
-		RepositoryStats: &models.RepositoryStats{
-			CalculatedAt:              strfmt.DateTime(j.StatsDt),
-			ProgrammingLanguagesStats: j.ModelPLS,
-			RepositoryURL:             j.URL,
-			TotalLinesOfCode:          int64(j.Loc),
-		},
-	}
-	source := data.DataSource.Slug
+func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Commit {
+	data := make([]insights.Commit, 0)
 	for _, iDoc := range docs {
-		var (
-			message *string
-			title   *string
-		)
+		commit := insights.Commit{}
+		commit.Connector = "git"
+		commit.ConnectorVersion = GitBackendVersion
 		doc, _ := iDoc.(map[string]interface{})
-		docUUID, _ := doc["uuid"].(string)
-		commitURL, _ := doc["commit_url"].(string)
-		commitRepoType, _ := doc["commit_repo_type"].(string)
-		sha, _ := doc["hash"].(string)
-		hashShort, _ := doc["hash_short"].(string)
-		sMessage, _ := doc["message"].(string)
-		sTitle, _ := doc["title"].(string)
-		repoShortURL, _ := doc["repo_short_name"].(string)
-		docCommit, _ := doc["doc_commit"].(bool)
-		emptyCommit, _ := doc["empty_commit"].(bool)
-		locAdded, _ := doc["lines_added"].(int64)
-		locRemoved, _ := doc["lines_removed"].(int64)
-		locChanged, _ := doc["lines_changed"].(int64)
-		_, squashedCommit := j.OrphanedMap["sha"]
-		if sMessage != "" {
-			message = &sMessage
-		}
-		if sTitle != "" {
-			title = &sTitle
-		}
-		parents, _ := doc["parents"].([]string)
-		authoredInTz, _ := doc["author_date"].(time.Time)
+		commit.URL, _ = doc["commit_url"].(string)
+		commit.SHA, _ = doc["hash"].(string)
+		commit.ShortHash, _ = doc["hash_short"].(string)
+		commit.Source = doc["commit_repo_type"].(string)
+		commit.Message, _ = doc["message"].(string)
+		_, commit.Orphaned = j.OrphanedMap["sha"]
+		commit.ParentSHAs, _ = doc["parents"].([]string)
+		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		authoredTz, _ := doc["tz"].(float64)
-		committedInTz, _ := doc["commit_date"].(time.Time)
-		committedDt, _ := doc["utc_commit"].(time.Time)
-		committedTz, _ := doc["commit_tz"].(float64)
+		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
 		createdOn := authoredDt
-		commitRoles := []*models.CommitRole{}
+		commit.SyncTimestamp = time.Now()
+		commitRoles := []insights.Contributor{}
 		identsAry, okIdents := doc["idents"].([][3]string)
 		identTypesAry, okIdentTypes := doc["ident_types"].([]string)
 		if okIdents && okIdentTypes {
 			for i := range identTypesAry {
-				var (
-					dt     time.Time
-					dtInTz time.Time
-					tz     float64
-				)
+				commitRole := insights.Contributor{}
 				ident := identsAry[i]
 				identType := identTypesAry[i]
-				if identType == "committer" {
-					dt = committedDt
-					dtInTz = committedInTz
-					tz = committedTz
-				} else {
-					dt = authoredDt
-					dtInTz = authoredInTz
-					tz = authoredTz
-				}
+				commitRole.Role = identType
+				commitRole.Weight = 1.0
 				name := ident[0]
 				username := ""
 				email := ident[2]
 				name, username = shared.PostprocessNameUsername(name, username, email)
-				userUUID := shared.UUIDAffs(ctx, source, email, name, username)
-				identity := &models.Identity{
-					ID:           userUUID,
-					DataSourceID: source,
-					Name:         name,
-					Username:     username,
-				}
-				commitRoleUUID := shared.UUIDNonEmpty(ctx, docUUID, fmt.Sprintf("%s-%d", identType, i), userUUID)
-				commitRole := &models.CommitRole{
-					ID:       commitRoleUUID,
-					Name:     identType,
-					User:     identity,
-					Weight:   1.0,
-					When:     strfmt.DateTime(dt),
-					WhenInTz: strfmt.DateTime(dtInTz),
-					WhenTz:   tz,
+				commitRole.Identity = user.UserIdentity{
+					Email:      email,
+					FirstName:  name,
+					IsVerified: false,
+					Username:   username,
+					Source:     commit.Source,
 				}
 				commitRoles = append(commitRoles, commitRole)
 			}
 		}
-		files := []*models.CommitFileAction{}
+		commit.Contributors = commitRoles
+		files := []insights.CommitFilesByType{}
 		fileAry, okFileAry := doc["file_data"].([]map[string]interface{})
 		if okFileAry {
 			for _, fileData := range fileAry {
-				var (
-					pAdded   *int64
-					pRemoved *int64
-					pChanged *int64
-				)
+				// TODO need to add logic to separate by the file type
+				file := insights.CommitFilesByType{}
+				file.LinesAdded = strconv.Itoa(fileData["added"].(int))
+				file.LinesRemoved = strconv.Itoa(fileData["removed"].(int))
 				action, _ := fileData["action"].(string)
-				name, _ := fileData["name"].(string)
-				iAdded, _ := fileData["added"].(int)
-				iRemoved, _ := fileData["removed"].(int)
-				added := int64(iAdded)
-				removed := int64(iRemoved)
-				if added > 0 {
-					pAdded = &added
-				}
-				if removed > 0 {
-					pRemoved = &removed
-				}
-				changed := added + removed
-				if changed > 0 {
-					pChanged = &changed
-				}
-				file := &models.CommitFileAction{
-					Action:  action,
-					Name:    name,
-					Added:   pAdded,
-					Removed: pRemoved,
-					Changed: pChanged,
+				if action == "M" {
+					file.FilesModified++
+				} else if action == "D" {
+					file.FilesDeleted++
+				} else {
+					file.FilesCreated++
 				}
 				files = append(files, file)
 			}
 		}
 		// Event
-		event := &models.Event{
-			Commit: &models.Commit{
-				ID:                 docUUID,
-				DataSourceID:       source,
-				CommitURL:          commitURL,
-				SHA:                sha,
-				HashShort:          hashShort,
-				IsDoc:              docCommit,
-				IsEmpty:            emptyCommit,
-				IsSquashed:         squashedCommit,
-				Message:            message,
-				Title:              title,
-				RepositoryShortURL: repoShortURL,
-				RepositoryType:     commitRepoType,
-				RepositoryURL:      j.URL,
-				Parents:            parents,
-				Roles:              commitRoles,
-				Files:              files,
-				Stats: &models.CommitStats{
-					LinesAdded:   locAdded,
-					LinesRemoved: locRemoved,
-					LinesChanged: locChanged,
-				},
-			},
-		}
-		data.Events = append(data.Events, event)
+		data = append(data, commit)
 		gMaxUpstreamDtMtx.Lock()
 		if createdOn.After(gMaxUpstreamDt) {
 			gMaxUpstreamDt = createdOn
 		}
 		gMaxUpstreamDtMtx.Unlock()
 	}
-	return
+	return data
 }
 
 // ItemID - return unique identifier for an item
@@ -1305,16 +1208,6 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 					Code:     code,
 				},
 			)
-		}
-		for _, item := range j.Pls {
-			j.ModelPLS = append(j.ModelPLS, &models.LanguageStats{
-				CalculatedAt: strfmt.DateTime(j.StatsDt),
-				Language:     item.Language,
-				Blank:        int64(item.Blank),
-				Code:         int64(item.Code),
-				Comment:      int64(item.Comment),
-				Files:        int64(item.Files),
-			})
 		}
 		return
 	}
@@ -1842,6 +1735,7 @@ func (j *DSGit) ParseFile(ctx *shared.Ctx, line string) (parsed, empty bool, err
 	}
 	m = shared.MatchGroups(GitStatsPattern, line)
 	if len(m) > 0 {
+		
 		j.ParseStats(ctx, m)
 		parsed = true
 		return

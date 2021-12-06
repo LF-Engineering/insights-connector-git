@@ -24,11 +24,6 @@ imports: ${GO_BIN_FILES}
 errcheck: ${GO_BIN_FILES}
 	${GO_ERRCHECK} ${GO_BIN_FILES}
 check: fmt lint imports vet errcheck
-swagger: clean_swagger
-	swagger -q generate model -t gen -f swagger/git.yaml
-clean_swagger:
-	rm -rf ./gen
-	mkdir gen
 clean:
 	rm -rf ${BINARIES}
 .PHONY: all
