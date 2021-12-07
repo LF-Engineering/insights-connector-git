@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/insights-datasource-shared/firehose"
 	"io"
 	"math"
 	"net/url"
@@ -62,6 +63,8 @@ const (
 	GitMaxMsgLength = 0x4000
 	// GitGenerateFlatDocs - do we want to generate flat commit co-authors docs, like docs with type: commit_co_author, commit_signer etc.?
 	GitGenerateFlatDocs = true
+	// StreamToPublish
+	GitDefaultStream = "PUT-S3-git-commits"
 )
 
 var (
@@ -484,6 +487,10 @@ var (
 	gMaxUpstreamDtMtx = &sync.Mutex{}
 )
 
+type Publisher interface {
+	PutRecordBatch(channel string, records []interface{}) ([]*firehose.PutResponse, error)
+}
+
 // RawPLS - programming language summary (all fields as strings)
 type RawPLS struct {
 	Language string `json:"language"`
@@ -531,6 +538,13 @@ type DSGit struct {
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
 	CommitsHash map[string]map[string]struct{}
+	// Publisher & stream
+	Publisher
+	Stream          string                            // stream to publish the data
+}
+
+func (j *DSGit) AddPublisher(publisher Publisher)  {
+	j.Publisher = publisher
 }
 
 // AddFlags - add git specific flags
@@ -576,6 +590,12 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	skipCacheCleanup, present := ctx.BoolEnvSet("SKIP_CACHE_CLEANUP")
 	if present {
 		j.SkipCacheCleanup = skipCacheCleanup
+	}
+
+	// setup stream
+	j.Stream = ctx.Env("GIT_STREAM")
+	if j.Stream == "" {
+		j.Stream = GitDefaultStream
 	}
 
 	// Some extra initializations
@@ -628,6 +648,8 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		m := &insights.Commit{}
 		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
 	}
+	kinesisClient, _ := firehose.NewClientProvider()
+	j.AddPublisher(kinesisClient)
 	return
 }
 
@@ -1470,13 +1492,23 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			// actual output
 			shared.Printf("output processing(%d/%d/%v)\n", len(items), len(*docs), final)
 			data := j.GetModelData(ctx, *docs)
-			// FIXME: actual output to some consumer...
-			jsonBytes, err := jsoniter.Marshal(data)
-			if err != nil {
-				shared.Printf("Error: %+v\n", err)
-				return
+			if j.Publisher != nil {
+				formattedData := make([]interface{}, 0)
+				for _, d := range data {
+					formattedData = append(formattedData, d)
+				}
+				_, err := j.Publisher.PutRecordBatch(j.Stream, formattedData)
+				if err != nil {
+					shared.Printf("Error: %+v\n", err)
+				}
+			} else {
+				jsonBytes, err := jsoniter.Marshal(data)
+				if err != nil {
+					shared.Printf("Error: %+v\n", err)
+					return
+				}
+				shared.Printf("%s\n", string(jsonBytes))
 			}
-			shared.Printf("%s\n", string(jsonBytes))
 			*docs = []interface{}{}
 			gMaxUpstreamDtMtx.Lock()
 			defer gMaxUpstreamDtMtx.Unlock()
