@@ -593,7 +593,7 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	}
 
 	// setup stream
-	j.Stream = ctx.Env("GIT_STREAM")
+	j.Stream = ctx.Env("DA_GIT_STREAM")
 	if j.Stream == "" {
 		j.Stream = GitDefaultStream
 	}
