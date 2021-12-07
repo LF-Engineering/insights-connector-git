@@ -2,10 +2,8 @@ module github.com/LF-Engineering/insights-datasource-git
 
 go 1.15
 
-replace github.com/LF-Engineering/insights-datasource-shared => /Users/swapnilwalke/Documents/go-workspace/LF-Engineering/insights-datasource-shared
-
 require (
-	github.com/LF-Engineering/insights-datasource-shared v1.1.1
+	github.com/LF-Engineering/insights-datasource-shared v1.1.2
 	github.com/LF-Engineering/lfx-event-schema v0.0.0-20211129182316-8c5d77a1442d
 	github.com/json-iterator/go v1.1.11
 	github.com/kr/text v0.2.0 // indirect
