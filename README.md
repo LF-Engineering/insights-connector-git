@@ -1,6 +1,10 @@
 # insights-datasource-git
 git data source V2
 
+#### Environment Variables
+
+- `DA_GIT_STREAM` : name of the firehose stream to push the data to
+#### Build & Run
 - run `make swagger` to generate models.
 - run `make` to build app.
 - run `./scripts/example_run.sh` to try it.
