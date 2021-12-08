@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/insights-datasource-shared/firehose"
 	"io"
 	"math"
 	"net/url"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/LF-Engineering/insights-datasource-shared/firehose"
 
 	"github.com/LF-Engineering/lfx-event-schema/service/user"
 
@@ -63,7 +64,7 @@ const (
 	GitMaxMsgLength = 0x4000
 	// GitGenerateFlatDocs - do we want to generate flat commit co-authors docs, like docs with type: commit_co_author, commit_signer etc.?
 	GitGenerateFlatDocs = true
-	// StreamToPublish
+	// GitDefaultStream - Stream To Publish
 	GitDefaultStream = "PUT-S3-git-commits"
 )
 
@@ -487,6 +488,7 @@ var (
 	gMaxUpstreamDtMtx = &sync.Mutex{}
 )
 
+// Publisher - for streaming data to Kinesis
 type Publisher interface {
 	PutRecordBatch(channel string, records []interface{}) ([]*firehose.PutResponse, error)
 }
@@ -520,6 +522,7 @@ type DSGit struct {
 	FlagReposPath        *string
 	FlagCachePath        *string
 	FlagSkipCacheCleanup *bool
+	FlagStream           *string
 	// Non-config variables
 	RepoName        string // repo name
 	Loc             int    // lines of code as reported by GitOpsCommand
@@ -540,10 +543,11 @@ type DSGit struct {
 	CommitsHash map[string]map[string]struct{}
 	// Publisher & stream
 	Publisher
-	Stream          string                            // stream to publish the data
+	Stream string // stream to publish the data
 }
 
-func (j *DSGit) AddPublisher(publisher Publisher)  {
+// AddPublisher - sets Kinesis publisher
+func (j *DSGit) AddPublisher(publisher Publisher) {
 	j.Publisher = publisher
 }
 
@@ -553,6 +557,7 @@ func (j *DSGit) AddFlags() {
 	j.FlagReposPath = flag.String("git-repos-path", GitDefaultReposPath, "path to store git repo clones, defaults to "+GitDefaultReposPath)
 	j.FlagCachePath = flag.String("git-cache-path", GitDefaultCachePath, "path to store gitops results cache, defaults to"+GitDefaultCachePath)
 	j.FlagSkipCacheCleanup = flag.Bool("git-skip-cache-cleanup", false, "skip gitops cache cleanup")
+	j.FlagStream = flag.String("git-stream", GitDefaultStream, "git kinesis stream name, for example PUT-S3-git-commits")
 }
 
 // ParseArgs - parse git specific environment variables
@@ -592,10 +597,13 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 		j.SkipCacheCleanup = skipCacheCleanup
 	}
 
-	// setup stream
-	j.Stream = ctx.Env("DA_GIT_STREAM")
-	if j.Stream == "" {
-		j.Stream = GitDefaultStream
+	// git Kinesis stream
+	j.Stream = GitDefaultStream
+	if shared.FlagPassed(ctx, "stream") {
+		j.Stream = *j.FlagStream
+	}
+	if ctx.EnvSet("STREAM") {
+		j.Stream = ctx.Env("STREAM")
 	}
 
 	// Some extra initializations
@@ -648,8 +656,10 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		m := &insights.Commit{}
 		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
 	}
-	kinesisClient, _ := firehose.NewClientProvider()
-	j.AddPublisher(kinesisClient)
+	if j.Stream != "" {
+		kinesisClient, _ := firehose.NewClientProvider()
+		j.AddPublisher(kinesisClient)
+	}
 	return
 }
 
