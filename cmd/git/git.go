@@ -1101,8 +1101,8 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 			for _, fileData := range fileAry {
 				// TODO need to add logic to separate by the file type
 				file := insights.CommitFilesByType{}
-				file.LinesAdded = strconv.Itoa(fileData["added"].(int))
-				file.LinesRemoved = strconv.Itoa(fileData["removed"].(int))
+				file.LinesAdded, _ = fileData["added"].(int)
+				file.LinesRemoved, _ = fileData["removed"].(int)
 				action, _ := fileData["action"].(string)
 				if action == "M" {
 					file.FilesModified++
