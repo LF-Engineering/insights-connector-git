@@ -2,7 +2,7 @@ FROM golang
 
 RUN apt-get update && apt-get install -y ca-certificates git-core ssh
 
-WORKDIR /app/delivery
+WORKDIR /app
 
 COPY cmd/git/git.go ./
 COPY go.mod ./
