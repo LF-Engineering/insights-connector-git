@@ -179,8 +179,3 @@ resource "aws_iam_role_policy_attachment" "task_execution_role_cloudwatch_policy
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
 }
-
-resource "aws_iam_role_policy_attachment" "task_execution_role_kinesis_policy_attachment" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonKinesisFullAccess"
-}
