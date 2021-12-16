@@ -8,4 +8,4 @@ COPY git ./
 COPY gitops ./
 COPY detect-removed-commits.sh ./
 
-ENTRYPOINT ["./git"]
+CMD ["./git"]
