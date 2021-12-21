@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"math"
 	"net/url"
@@ -15,8 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/LF-Engineering/insights-datasource-shared/firehose"
 
 	"github.com/LF-Engineering/lfx-event-schema/service/user"
 
@@ -66,6 +67,8 @@ const (
 	GitGenerateFlatDocs = true
 	// GitDefaultStream - Stream To Publish
 	GitDefaultStream = "PUT-S3-git-commits"
+	// GitDataSource - constant for git source
+	GitDataSource = "git"
 )
 
 var (
@@ -490,7 +493,7 @@ var (
 
 // Publisher - for streaming data to Kinesis
 type Publisher interface {
-	PutRecordBatch(channel string, records []interface{}) ([]*firehose.PutResponse, error)
+	PushEvents(source, eventType, subEventType string, data []interface{}) error
 }
 
 // RawPLS - programming language summary (all fields as strings)
@@ -657,8 +660,14 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
 	}
 	if j.Stream != "" {
-		kinesisClient, _ := firehose.NewClientProvider()
-		j.AddPublisher(kinesisClient)
+		sess, err := session.NewSession()
+		if err != nil {
+			return err
+		}
+		s3Client := s3.New(sess)
+		objectStore := datalake.NewS3ObjectStore(s3Client)
+		datalakeClient := datalake.NewStoreClient(&objectStore)
+		j.AddPublisher(&datalakeClient)
 	}
 	return
 }
@@ -1084,7 +1093,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 				username := ""
 				email := ident[2]
 				name, username = shared.PostprocessNameUsername(name, username, email)
-				commitRole.Identity = user.UserIdentity{
+				commitRole.Identity = user.UserIdentityObjectBase{
 					Email:      email,
 					FirstName:  name,
 					IsVerified: false,
@@ -1507,7 +1516,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				_, err := j.Publisher.PutRecordBatch(j.Stream, formattedData)
+				err := j.Publisher.PushEvents("insights", GitDataSource, "commits", formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 				}
