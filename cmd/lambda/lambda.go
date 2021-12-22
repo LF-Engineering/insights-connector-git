@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ecs"
 	"log"
@@ -13,7 +13,10 @@ import (
 
 func HandleRequest(ctx context.Context) {
 	log.Println("lambda invoked")
-	mysession := session.Must(session.NewSession())
+	config := &aws.Config{
+		Region:           aws.String(os.Getenv("AWS_REGION")),
+	}
+	mysession := session.Must(session.NewSession(config))
 	svc := ecs.New(mysession)
 	runTaskInp := &ecs.RunTaskInput{
 
@@ -28,9 +31,8 @@ func HandleRequest(ctx context.Context) {
 		Overrides:               & ecs.TaskOverride{
 			ContainerOverrides:        []*ecs.ContainerOverride{{
 				Name:                 aws.String("insights-git"),
-				Command:              []*string{aws.String("./git"), aws.String("--git-url"), aws.String(os.Getenv("GIT_REPO")), aws.String("--git-es-url"), aws.String("ES_URL")},
+				Environment:          []*ecs.KeyValuePair{&ecs.KeyValuePair{Name: aws.String("REPO_URL"), Value: aws.String("REPO_URL")}, &ecs.KeyValuePair{Name: aws.String("ES_URL"), Value: aws.String(os.Getenv("ES_URL"))}},
 			},
-
 		}},
 		TaskDefinition:           aws.String(os.Getenv("TASK_DEFINITION")),
 	}
