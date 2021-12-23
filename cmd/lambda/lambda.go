@@ -38,8 +38,10 @@ func HandleRequest(ctx context.Context) {
 	}
 	log.Println("Input Prepared")
 	output, err := svc.RunTask(runTaskInp)
+	if err != nil {
+		log.Fatal("couldn't spawn the ecs task", err.Error())
+	}
 	log.Println(output)
-	log.Println(err)
 }
 
 func main() {
