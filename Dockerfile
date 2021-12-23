@@ -2,10 +2,13 @@ FROM alpine:3.14
 
 WORKDIR /app
 
+ENV REPO_URL='<GIT-REPO-URL>'
+ENV ES_URL='<GIT-ES-URL>'
 RUN apk update && apk add git
-
+RUN apk add cloc
+RUN apk add --no-cache bash
 COPY git ./
-COPY gitops ./
-COPY detect-removed-commits.sh ./
+COPY gitops /usr/bin/
+COPY detect-removed-commits.sh /usr/bin/
 
-ENTRYPOINT ["./git"]
+CMD ./git --git-url=${REPO_URL} --git-es-url=${ES_URL}

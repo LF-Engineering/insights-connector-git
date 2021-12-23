@@ -493,7 +493,7 @@ var (
 
 // Publisher - for streaming data to Kinesis
 type Publisher interface {
-	PushEvents(source, eventType, subEventType string, data []interface{}) error
+	PushEvents(source, eventType, subEventType, env string, data []interface{}) error
 }
 
 // RawPLS - programming language summary (all fields as strings)
@@ -1076,6 +1076,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
+		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
 		createdOn := authoredDt
 		commit.SyncTimestamp = time.Now()
@@ -1516,7 +1517,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				err := j.Publisher.PushEvents("insights", GitDataSource, "commits", formattedData)
+				err := j.Publisher.PushEvents("insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 				}
