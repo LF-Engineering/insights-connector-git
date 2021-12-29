@@ -4,6 +4,7 @@ WORKDIR /app
 
 ENV REPO_URL='<GIT-REPO-URL>'
 ENV ES_URL='<GIT-ES-URL>'
+
 RUN apk update && apk add git
 RUN apk add cloc
 RUN apk add --no-cache bash
