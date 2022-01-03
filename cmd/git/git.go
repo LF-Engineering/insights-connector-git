@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/lfx-event-schema/service/itx/repository"
 	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -1078,6 +1079,11 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
+		id, err := repository.GenerateRepositoryID(commit.Source, commit.RepositoryURL, "")
+		if err != nil {
+			shared.Printf("GenerateRepositoryID %+v", err)
+		}
+		commit.RepositoryID = id
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
 		createdOn := authoredDt
