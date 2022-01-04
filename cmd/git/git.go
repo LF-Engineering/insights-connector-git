@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/lfx-event-schema/service/itx/repository"
 	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -69,6 +70,12 @@ const (
 	GitDefaultStream = "PUT-S3-git-commits"
 	// GitDataSource - constant for git source
 	GitDataSource = "git"
+	// UnknownExtension: Empty file extension type
+	UnknownExtension = "UNKNOWN"
+	// CommitCreated commit created event
+	CommitCreated = "commit.created"
+	// CommitUpdated commit updated event
+	CommitUpdated = "commit.updated"
 )
 
 var (
@@ -493,7 +500,7 @@ var (
 
 // Publisher - for streaming data to Kinesis
 type Publisher interface {
-	PushEvents(source, eventType, subEventType, env string, data []interface{}) error
+	PushEvents(action, source, eventType, subEventType, env string, data []interface{}) error
 }
 
 // RawPLS - programming language summary (all fields as strings)
@@ -1072,10 +1079,15 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 		commit.ShortHash, _ = doc["hash_short"].(string)
 		commit.Source, _ = doc["commit_repo_type"].(string)
 		commit.Message, _ = doc["message"].(string)
-		_, commit.Orphaned = j.OrphanedMap["sha"]
+		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
+		id, err := repository.GenerateRepositoryID(commit.Source, commit.RepositoryURL, "")
+		if err != nil {
+			shared.Printf("GenerateRepositoryID %+v", err)
+		}
+		commit.RepositoryID = id
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
 		createdOn := authoredDt
@@ -1105,25 +1117,38 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 			}
 		}
 		commit.Contributors = commitRoles
-		files := []insights.CommitFilesByType{}
+		fileCache := make(map[string]*insights.CommitFilesByType)
 		fileAry, okFileAry := doc["file_data"].([]map[string]interface{})
 		if okFileAry {
 			for _, fileData := range fileAry {
-				// TODO need to add logic to separate by the file type
-				file := insights.CommitFilesByType{}
-				file.LinesAdded, _ = fileData["added"].(int)
-				file.LinesRemoved, _ = fileData["removed"].(int)
+				fileName, _ := fileData["name"].(string)
+				if fileName == "" {
+					continue
+				}
+				ext := ParseFileExtension(fileName)
+				if _, ok := fileCache[ext]; !ok {
+					fileCache[ext] = &insights.CommitFilesByType{Type: ext}
+				}
+				obj := fileCache[ext]
+				linesAdded, _ := fileData["added"].(int)
+				obj.LinesAdded += linesAdded
+				linesRemoved, _ := fileData["removed"].(int)
+				obj.LinesRemoved += linesRemoved
 				action, _ := fileData["action"].(string)
 				if action == "M" {
-					file.FilesModified++
+					obj.FilesModified++
 				} else if action == "D" {
-					file.FilesDeleted++
+					obj.FilesDeleted++
 				} else {
-					file.FilesCreated++
+					obj.FilesCreated++
 				}
-				files = append(files, file)
+			}
+			commit.Files = make([]insights.CommitFilesByType, 0)
+			for _, value := range fileCache {
+				commit.Files = append(commit.Files, *value)
 			}
 		}
+		commit.MergeCommit = len(fileAry) == 0
 		// Event
 		data = append(data, commit)
 		gMaxUpstreamDtMtx.Lock()
@@ -1517,7 +1542,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				err := j.Publisher.PushEvents("insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
+				err := j.Publisher.PushEvents( CommitCreated, "insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 				}
@@ -1878,6 +1903,18 @@ func (j *DSGit) ParseAction(ctx *shared.Ctx, data map[string]string) {
 	j.CommitFiles[fileName]["action"] = data["action"]
 	j.CommitFiles[fileName]["file"] = fileName
 	j.CommitFiles[fileName]["newfile"] = data["newfile"]
+}
+
+func ParseFileExtension(filename string) string {
+	parts := strings.Split(filename, ".")
+	if len(parts) == 0 {
+		return UnknownExtension
+	}
+	extension := parts[len(parts)-1]
+	if extension == "" {
+		return UnknownExtension
+	}
+	return extension
 }
 
 // ParseTrailer - parse possible trailer line
