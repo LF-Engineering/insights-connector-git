@@ -72,6 +72,10 @@ const (
 	GitDataSource = "git"
 	// UnknownExtension: Empty file extension type
 	UnknownExtension = "UNKNOWN"
+	// CommitCreated commit created event
+	CommitCreated = "commit.created"
+	// CommitUpdated commit updated event
+	CommitUpdated = "commit.updated"
 )
 
 var (
@@ -496,7 +500,7 @@ var (
 
 // Publisher - for streaming data to Kinesis
 type Publisher interface {
-	PushEvents(source, eventType, subEventType, env string, data []interface{}) error
+	PushEvents(action, source, eventType, subEventType, env string, data []interface{}) error
 }
 
 // RawPLS - programming language summary (all fields as strings)
@@ -1538,7 +1542,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				err := j.Publisher.PushEvents("insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
+				err := j.Publisher.PushEvents( CommitCreated, "insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 				}
