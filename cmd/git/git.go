@@ -4,10 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/lfx-event-schema/service/itx/repository"
-	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"math"
 	"net/url"
@@ -19,6 +15,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/LF-Engineering/lfx-event-schema/service/itx/repository"
+	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 
 	"github.com/LF-Engineering/lfx-event-schema/service/user"
 
@@ -70,7 +71,7 @@ const (
 	GitDefaultStream = "PUT-S3-git-commits"
 	// GitDataSource - constant for git source
 	GitDataSource = "git"
-	// UnknownExtension: Empty file extension type
+	// UnknownExtension - Empty file extension type
 	UnknownExtension = "UNKNOWN"
 	// CommitCreated commit created event
 	CommitCreated = "commit.created"
@@ -1542,7 +1543,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				err := j.Publisher.PushEvents( CommitCreated, "insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
+				err := j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 				}
@@ -1905,6 +1906,7 @@ func (j *DSGit) ParseAction(ctx *shared.Ctx, data map[string]string) {
 	j.CommitFiles[fileName]["newfile"] = data["newfile"]
 }
 
+// ParseFileExtension - return file extension if present
 func ParseFileExtension(filename string) string {
 	parts := strings.Split(filename, ".")
 	if len(parts) == 0 {
