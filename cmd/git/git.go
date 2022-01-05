@@ -548,6 +548,7 @@ type DSGit struct {
 	RecentLines     []string                          // recent commit lines
 	OrphanedCommits []string                          // orphaned commits SHAs
 	OrphanedMap     map[string]struct{}               // orphaned commits SHAs
+	DefaultBranch   string                            // default branch name, example: master, main
 	// PairProgramming mode
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
@@ -1396,6 +1397,41 @@ func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, er
 	return ch, nil
 }
 
+// GetGitBranches - get default git branch name
+func (j *DSGit) GetGitBranches(ctx *shared.Ctx) (err error) {
+	if ctx.Debug > 0 {
+		shared.Printf("get git branch data from %s\n", j.GitPath)
+	}
+	cmdLine := []string{"git", "branch", "-a"}
+	var sout, serr string
+	sout, serr, err = shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	if err != nil {
+		shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, err, sout, serr)
+		return
+	}
+	if ctx.Debug > 0 {
+		shared.Printf("git branch data for %s: %s\n", j.URL, sout)
+	}
+	ary := strings.Split(sout, "\n")
+	for _, branch := range ary {
+		branch := strings.TrimSpace(branch)
+		if branch == "" {
+			continue
+		}
+		if ctx.Debug > 1 {
+			shared.Printf("branch: '%s'\n", branch)
+		}
+		if branch[:1] == "*" {
+			branch = branch[2:]
+			if ctx.Debug > 0 {
+				shared.Printf("Default branch: '%s'\n", branch)
+			}
+			j.DefaultBranch = branch
+		}
+	}
+	return
+}
+
 // ParseGitLog - update git repo
 func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 	if ctx.Debug > 0 {
@@ -1685,6 +1721,15 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 	return
 }
 
+// GetCommitBranch - get commit branch from refs
+func (j *DSGit) GetCommitBranch(refs []string) string {
+	// ref can be:
+	// tag: refs/tags/0.9.0
+	// refs/heads/DA-2371-prod
+	// HEAD -> unicron-add-branches, origin/main, origin/HEAD, main
+	return refs[0]
+}
+
 // ParseCommit - parse commit
 func (j *DSGit) ParseCommit(ctx *shared.Ctx, line string) (parsed bool, err error) {
 	m := shared.MatchGroups(GitCommitPattern, line)
@@ -1712,6 +1757,11 @@ func (j *DSGit) ParseCommit(ctx *shared.Ctx, line string) (parsed bool, err erro
 	j.Commit["commit"] = m["commit"]
 	j.Commit["parents"] = parentsAry
 	j.Commit["refs"] = refsAry
+	if len(refsAry) > 0 {
+		j.Commit["branch"] = j.GetCommitBranch(refsAry)
+	} else {
+		j.Commit["branch"] = j.DefaultBranch
+	}
 	j.CommitFiles = make(map[string]map[string]interface{})
 	j.ParseState = GitParseStateHeader
 	parsed = true
@@ -2107,8 +2157,15 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			return
 		}
 	}
+	err = j.GetGitBranches(ctx)
+	if err != nil {
+		return
+	}
 	var cmd *exec.Cmd
 	cmd, err = j.ParseGitLog(ctx)
+	if err != nil {
+		return
+	}
 	// Continue with operations that need git ops
 	nThreads := 0
 	locFinished := false
