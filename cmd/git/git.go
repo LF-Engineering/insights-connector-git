@@ -1093,11 +1093,16 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		id, err := repository.GenerateRepositoryID(commit.Source, commit.RepositoryURL, "")
+		repoID, err := repository.GenerateRepositoryID(commit.Source, commit.RepositoryURL, "")
 		if err != nil {
 			shared.Printf("GenerateRepositoryID %+v", err)
 		}
-		commit.RepositoryID = id
+		commit.RepositoryID = repoID
+		commitID, err := insights.GenerateCommitID(repoID, commit.SHA)
+		if err != nil {
+			shared.Printf("GenerateCommitID %+v", err)
+		}
+		commit.ID = commitID
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
 		createdOn := authoredDt
@@ -1110,15 +1115,20 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 				commitRole := insights.Contributor{}
 				ident := identsAry[i]
 				identType := identTypesAry[i]
-				commitRole.Role = identType
+				commitRole.Role = insights.Role(identType)
 				commitRole.Weight = 1.0
 				name := ident[0]
 				username := ""
 				email := ident[2]
 				name, username = shared.PostprocessNameUsername(name, username, email)
+				userID, err := user.GenerateIdentity(&commit.Source, &email, &name, &username)
+				if err != nil {
+					shared.Printf("GenerateIdentity %+v", err)
+				}
 				commitRole.Identity = user.UserIdentityObjectBase{
+					ID:         userID,
 					Email:      email,
-					FirstName:  name,
+					Name:       name,
 					IsVerified: false,
 					Username:   username,
 					Source:     commit.Source,
