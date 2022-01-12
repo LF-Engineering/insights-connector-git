@@ -24,6 +24,8 @@ import (
 	"github.com/LF-Engineering/lfx-event-schema/service/user"
 
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
+	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	jsoniter "github.com/json-iterator/go"
 	// jsoniter "github.com/json-iterator/go"
@@ -77,6 +79,12 @@ const (
 	CommitCreated = "commit.created"
 	// CommitUpdated commit updated event
 	CommitUpdated = "commit.updated"
+	// InProgress status
+	InProgress = "in_progress"
+	// Failed status
+	Failed = "failed"
+	// Success status
+	Success = "success"
 )
 
 var (
@@ -553,15 +561,44 @@ type DSGit struct {
 	// PairProgramming mode
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
-	CommitsHash map[string]map[string]struct{}
+	CommitsHash     map[string]map[string]struct{}
 	// Publisher & stream
 	Publisher
-	Stream string // stream to publish the data
+	Stream          string // stream to publish the data
+	Logger          logger.Logger
 }
 
 // AddPublisher - sets Kinesis publisher
 func (j *DSGit) AddPublisher(publisher Publisher) {
 	j.Publisher = publisher
+}
+
+func (j *DSGit) AddLogger(ctx *shared.Ctx) {
+	client, err := elastic.NewClientProvider(&elastic.Params{
+		URL:      ctx.ESURL,
+	})
+	if err != nil {
+		shared.Printf("AddLogger error: %+v", err)
+		return
+	}
+	logProvider, err := logger.NewLogger(client, os.Getenv("ENV"))
+	if err != nil {
+		shared.Printf("AddLogger error: %+v", err)
+		return
+	}
+	j.Logger = *logProvider
+}
+
+func (j *DSGit) WriteLog(ctx *shared.Ctx, status, message string) {
+	_ = j.Logger.Write(&logger.Log{
+		Connector:     GitDataSource,
+		Configuration: []map[string]string{{"REPO_URL": j.URL, "ES_URL": ctx.ESURL}},
+		Status:        status,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+		ProjectSlug:   ctx.Project,
+		Message:       message,
+	})
 }
 
 // AddFlags - add git specific flags
@@ -2442,9 +2479,12 @@ func main() {
 		shared.Printf("Error: %+v\n", err)
 		return
 	}
+	git.WriteLog(&ctx, InProgress, "")
 	err = git.Sync(&ctx)
 	if err != nil {
 		shared.Printf("Error: %+v\n", err)
+		git.WriteLog(&ctx, Failed, err.Error())
 		return
 	}
+	git.WriteLog(&ctx, Success, "")
 }
