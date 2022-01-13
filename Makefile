@@ -1,7 +1,7 @@
 GO_BIN_FILES=cmd/git/git.go 
 #for race CGO_ENABLED=1
 # GO_ENV=CGO_ENABLED=1
-GO_ENV=CGO_ENABLED=0
+GO_ENV=GOOS=linux CGO_ENABLED=0
 # GO_BUILD=go build -ldflags '-s -w' -race
 GO_BUILD=go build -ldflags '-s -w'
 GO_FMT=gofmt -s -w

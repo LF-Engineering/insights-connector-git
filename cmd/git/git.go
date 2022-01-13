@@ -1604,7 +1604,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				err := j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("ENV"), formattedData)
+				err := j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 				}
