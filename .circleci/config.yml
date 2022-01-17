@@ -28,6 +28,8 @@ jobs:
       - setup_remote_docker
       - attach_workspace:
           at: ./
+      - attach_workspace:
+          at: workspace
       - run:
           name: Install awscli
           command: pip install awscli
