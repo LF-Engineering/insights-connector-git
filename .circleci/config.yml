@@ -37,7 +37,7 @@ jobs:
             eval "echo 'export AWS_ACCESS_KEY_ID=\$$AWS_ACCESS_KEY_ID_ENV_VAR'" >> $BASH_ENV
             eval "echo 'export AWS_SECRET_ACCESS_KEY=\$$AWS_SECRET_ACCESS_KEY_ENV_VAR'" >> $BASH_ENV
             eval "echo 'export AWS_ACCOUNT_ID=\$$AWS_ACCOUNT_ID_ENV_VAR'" >> $BASH_ENV
-            eval "echo 'export AWS_REGION=\$$AWS_REGION_ENV_VAR'" >> $BASH_ENV
+            eval "echo 'export AWS_DEFAULT_REGION=\$$AWS_REGION_ENV_VAR'" >> $BASH_ENV
       - run:
           name: Setup common environment variables
           command: |
