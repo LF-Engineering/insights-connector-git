@@ -16,7 +16,7 @@ jobs:
           command: make git
       - setup_remote_docker
       - persist_to_workspace:
-          root: ./
+          root: /tmp/workspace
           paths:
             - git
             - gitops
@@ -29,7 +29,7 @@ jobs:
       - checkout
       - setup_remote_docker
       - attach_workspace:
-          at: workspace
+          at: /tmp/workspace
       - run:
           name: Install awscli
           command: pip install awscli
