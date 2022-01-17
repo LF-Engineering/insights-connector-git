@@ -6,8 +6,6 @@ jobs:
     working_directory: /go/src/github.com/LF-Engineering/insights-connector-git
     steps:
       - checkout
-      - attach_workspace:
-          at: workspace
       - run:
           name: setup GITHUB token for private repositories
           command: git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/LF-Engineering".insteadOf "https://github.com/LF-Engineering"
