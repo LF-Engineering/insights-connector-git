@@ -7,6 +7,9 @@ jobs:
     steps:
       - checkout
       - run:
+          name: setup GITHUB token for private repositories
+          command: git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/LF-Engineering".insteadOf "https://github.com/LF-Engineering"
+      - run:
           name: Build Executable
           command: make git
       - setup_remote_docker
@@ -56,6 +59,7 @@ jobs:
       AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_DEV
       AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_DEV
       AWS_ACCOUNT_ID_ENV_VAR: 395594542180
+      GITHUB_TOKEN: GITHUB_TOKEN
       STAGE: dev
       TAG: latest
 
@@ -65,6 +69,7 @@ jobs:
       AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_TEST
       AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_TEST
       AWS_ACCOUNT_ID_ENV_VAR: AWS_ACCOUNT_ID_TEST
+      GITHUB_TOKEN: GITHUB_TOKEN
       STAGE: test
       TAG: test
 
@@ -74,6 +79,7 @@ jobs:
       AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_PROD
       AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_PROD
       AWS_ACCOUNT_ID_ENV_VAR: AWS_ACCOUNT_ID_PROD
+      GITHUB_TOKEN: GITHUB_TOKEN
       STAGE: prod
       TAG: stable
 
