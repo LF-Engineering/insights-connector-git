@@ -28,8 +28,6 @@ jobs:
       - setup_remote_docker
       - attach_workspace:
           at: ./
-      - attach_workspace:
-          at: workspace
       - run:
           name: Install awscli
           command: pip install awscli
@@ -51,6 +49,10 @@ jobs:
           name: Authenticate ECR
           command: |
             aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.us-east-1.amazonaws.com
+      - run:
+          name: Tag the image
+          command: |
+            docker tag ${TAG} ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.us-east-1.amazonaws.com/insights-connector-git
       - run:
           name: Push image
           command: |
