@@ -40,7 +40,7 @@ jobs:
       - run:
           name: Setup common environment variables
           command: |
-            echo 'export FULL_IMAGE_NAME="395594542180.dkr.ecr.us-east-1.amazonaws.com/insights-connector-git:${TAG}"' >> $BASH_ENV
+            echo 'export FULL_IMAGE_NAME="${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.us-east-1.amazonaws.com/insights-connector-git:${TAG}"' >> $BASH_ENV
       - run:
           name: Build image
           command: |
