@@ -53,7 +53,7 @@ jobs:
       - run:
           name: Authenticate ECR
           command: |
-            aws ecr get-login-password --region us-east-2 --profile lfproduct-dev | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.us-east-2.amazonaws.com
+            aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.us-east-2.amazonaws.com
       - run:
           name: Tag the image
           command: |
@@ -69,7 +69,6 @@ jobs:
       AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_DEV
       AWS_ACCOUNT_ID_ENV_VAR: "395594542180"
       AWS_REGION_ENV_VAR: AWS_REGION_DEV
-      AWS_PROFILE_ENV_VAR: AWS_PROFILE_DEV
       GITHUB_TOKEN: GITHUB_TOKEN
       STAGE: dev
       TAG: latest
@@ -81,7 +80,6 @@ jobs:
       AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_TEST
       AWS_ACCOUNT_ID_ENV_VAR: AWS_ACCOUNT_ID_TEST
       AWS_REGION_ENV_VAR: AWS_REGION_TEST
-      AWS_PROFILE_ENV_VAR: AWS_PROFILE_TEST
       GITHUB_TOKEN: GITHUB_TOKEN
       STAGE: test
       TAG: test
@@ -93,7 +91,6 @@ jobs:
       AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_PROD
       AWS_ACCOUNT_ID_ENV_VAR: AWS_ACCOUNT_ID_PROD
       AWS_REGION_ENV_VAR: AWS_REGION_PROD
-      AWS_PROFILE_ENV_VAR: AWS_PROFILE_PROD
       GITHUB_TOKEN: GITHUB_TOKEN
       STAGE: prod
       TAG: stable
