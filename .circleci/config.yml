@@ -55,6 +55,10 @@ jobs:
           command: |
             aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.us-east-1.amazonaws.com
       - run:
+          name: Tag the image
+          command: |
+            docker tag $FULL_IMAGE_NAME $FULL_IMAGE_NAME
+      - run:
           name: Push image
           command: |
             docker push $FULL_IMAGE_NAME
