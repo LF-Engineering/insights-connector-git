@@ -49,7 +49,7 @@ jobs:
       - run:
           name: setup the docker repository to be able to push image in aws (should succeed on first time & allowed to fail later)
           command: |
-            aws ecr create-repository --repository-name insights-git-connector || true
+            aws ecr create-repository --repository-name insights-connector-git || true
       - run:
           name: Build image
           command: |
