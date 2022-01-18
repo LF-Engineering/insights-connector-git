@@ -41,11 +41,11 @@ jobs:
       - run:
           name: Setup common environment variables
           command: |
-            echo 'export FULL_IMAGE_NAME="${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.${AWS_REGION_ENV_VAR}.amazonaws.com/insights-connector-git:${TAG}"' >> $BASH_ENV
+            echo 'export FULL_IMAGE_NAME="${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/insights-connector-git:${TAG}"' >> $BASH_ENV
       - run:
           name: Authenticate ECR
           command: |
-            aws ecr get-login-password --region ${AWS_REGION_ENV_VAR} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.${AWS_REGION_ENV_VAR}.amazonaws.com
+            aws ecr get-login-password | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
       - run:
           name: setup the docker repository to be able to push image in aws (should succeed on first time & allowed to fail later)
           command: |
@@ -61,10 +61,10 @@ jobs:
   deploy_dev:
     <<: *deploy
     environment:
+      AWS_REGION_ENV_VAR: AWS_REGION_DEV
       AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_DEV
       AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_DEV
       AWS_ACCOUNT_ID_ENV_VAR: "395594542180"
-      AWS_REGION_ENV_VAR: AWS_REGION_DEV
       GITHUB_TOKEN: GITHUB_TOKEN
       STAGE: dev
       TAG: latest
