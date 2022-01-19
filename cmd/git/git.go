@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/lfx-event-schema/service"
 	"io"
 	"math"
 	"net/url"
@@ -25,8 +26,8 @@ import (
 
 	shared "github.com/LF-Engineering/insights-datasource-shared"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
+	"github.com/LF-Engineering/lfx-event-schema/service/insights/git"
 	jsoniter "github.com/json-iterator/go"
-	// jsoniter "github.com/json-iterator/go"
 )
 
 const (
@@ -77,6 +78,8 @@ const (
 	CommitCreated = "commit.created"
 	// CommitUpdated commit updated event
 	CommitUpdated = "commit.updated"
+	// GitConnector ...
+	GitConnector = "git-connector"
 )
 
 var (
@@ -666,7 +669,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		return
 	}
 	if ctx.Debug > 1 {
-		m := &insights.Commit{}
+		m := &git.Commit{}
 		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
 	}
 	if j.Stream != "" {
@@ -1075,30 +1078,42 @@ func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error)
 }
 
 // GetModelData - return data in swagger format
-func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Commit {
-	data := make([]insights.Commit, 0)
+func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCreatedEvent {
+	data := make([]git.CommitCreatedEvent, 0)
+	commitBaseEvent := git.CommitBaseEvent{
+		Connector:        insights.GitConnector,
+		ConnectorVersion: GitBackendVersion,
+		Source:           insights.GitSource,
+	}
+	baseEvent := service.BaseEvent{
+		Type:     CommitCreated,
+		CRUDInfo: service.CRUDInfo{
+			CreatedBy: GitConnector,
+			UpdatedBy: GitConnector,
+			CreatedAt: time.Now().Unix(),
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
 	for _, iDoc := range docs {
-		commit := insights.Commit{}
-		commit.Connector = "git"
-		commit.ConnectorVersion = GitBackendVersion
+		commit := git.Commit{}
 		doc, _ := iDoc.(map[string]interface{})
 		commit.URL, _ = doc["commit_url"].(string)
 		commit.SHA, _ = doc["hash"].(string)
 		commit.Branch, _ = doc["branch"].(string)
 		commit.DefaultBranch, _ = doc["is_default_branch"].(bool)
 		commit.ShortHash, _ = doc["hash_short"].(string)
-		commit.Source, _ = doc["commit_repo_type"].(string)
+		source, _ := doc["commit_repo_type"].(string)
 		commit.Message, _ = doc["message"].(string)
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		repoID, err := repository.GenerateRepositoryID(commit.Source, commit.RepositoryURL, "")
+		repoID, err := repository.GenerateRepositoryID(source, commit.RepositoryURL, "")
 		if err != nil {
 			shared.Printf("GenerateRepositoryID %+v", err)
 		}
 		commit.RepositoryID = repoID
-		commitID, err := insights.GenerateCommitID(repoID, commit.SHA)
+		commitID, err := git.GenerateCommitID(repoID, commit.SHA)
 		if err != nil {
 			shared.Printf("GenerateCommitID %+v", err)
 		}
@@ -1121,7 +1136,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 				username := ""
 				email := ident[2]
 				name, username = shared.PostprocessNameUsername(name, username, email)
-				userID, err := user.GenerateIdentity(&commit.Source, &email, &name, &username)
+				userID, err := user.GenerateIdentity(&source, &email, &name, &username)
 				if err != nil {
 					shared.Printf("GenerateIdentity %+v", err)
 				}
@@ -1131,13 +1146,13 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 					Name:       name,
 					IsVerified: false,
 					Username:   username,
-					Source:     commit.Source,
+					Source:     GitDataSource,
 				}
 				commitRoles = append(commitRoles, commitRole)
 			}
 		}
 		commit.Contributors = commitRoles
-		fileCache := make(map[string]*insights.CommitFilesByType)
+		fileCache := make(map[string]*git.CommitFilesByType)
 		fileAry, okFileAry := doc["file_data"].([]map[string]interface{})
 		if okFileAry {
 			for _, fileData := range fileAry {
@@ -1147,7 +1162,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 				}
 				ext := ParseFileExtension(fileName)
 				if _, ok := fileCache[ext]; !ok {
-					fileCache[ext] = &insights.CommitFilesByType{Type: ext}
+					fileCache[ext] = &git.CommitFilesByType{Type: ext}
 				}
 				obj := fileCache[ext]
 				linesAdded, _ := fileData["added"].(int)
@@ -1163,14 +1178,18 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []insights.Com
 					obj.FilesCreated++
 				}
 			}
-			commit.Files = make([]insights.CommitFilesByType, 0)
+			commit.Files = make([]git.CommitFilesByType, 0)
 			for _, value := range fileCache {
 				commit.Files = append(commit.Files, *value)
 			}
 		}
 		commit.MergeCommit = len(fileAry) == 0
 		// Event
-		data = append(data, commit)
+		data = append(data, git.CommitCreatedEvent{
+			CommitBaseEvent: commitBaseEvent,
+			BaseEvent:       baseEvent,
+			Payload:         commit,
+		})
 		gMaxUpstreamDtMtx.Lock()
 		if createdOn.After(gMaxUpstreamDt) {
 			gMaxUpstreamDt = createdOn
