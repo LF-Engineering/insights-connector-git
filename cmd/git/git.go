@@ -25,8 +25,8 @@ import (
 	"github.com/LF-Engineering/lfx-event-schema/service/user"
 
 	shared "github.com/LF-Engineering/insights-datasource-shared"
-	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
+	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights/git"
 	jsoniter "github.com/json-iterator/go"
@@ -578,7 +578,9 @@ func (j *DSGit) AddPublisher(publisher Publisher) {
 
 func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 	client, err := elastic.NewClientProvider(&elastic.Params{
-		URL:      ctx.ESURL,
+		URL:      os.Getenv("ELASTIC_LOG_URL"),
+		Password: os.Getenv("ELASTIC_LOG_PASSWORD"),
+		Username: os.Getenv("ELASTIC_LOG_USER"),
 	})
 	if err != nil {
 		shared.Printf("AddLogger error: %+v", err)
@@ -595,11 +597,15 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 func (j *DSGit) WriteLog(ctx *shared.Ctx, status, message string) {
 	_ = j.Logger.Write(&logger.Log{
 		Connector:     GitDataSource,
-		Configuration: []map[string]string{{"REPO_URL": j.URL, "ES_URL": ctx.ESURL}},
+		Configuration: []map[string]string{
+			{
+				"REPO_URL": j.URL,
+				"ES_URL": ctx.ESURL,
+				"ProjectSlug": ctx.Project,
+			}},
 		Status:        status,
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
-		ProjectSlug:   ctx.Project,
 		Message:       message,
 	})
 }
@@ -719,6 +725,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		datalakeClient := datalake.NewStoreClient(&objectStore)
 		j.AddPublisher(&datalakeClient)
 	}
+	j.AddLogger(ctx)
 	return
 }
 
@@ -2499,12 +2506,12 @@ func main() {
 		shared.Printf("Error: %+v\n", err)
 		return
 	}
-	git.WriteLog(&ctx, InProgress, "")
+	git.WriteLog(&ctx, logger.InProgress, "")
 	err = git.Sync(&ctx)
 	if err != nil {
 		shared.Printf("Error: %+v\n", err)
-		git.WriteLog(&ctx, Failed, err.Error())
+		git.WriteLog(&ctx, logger.Failed, err.Error())
 		return
 	}
-	git.WriteLog(&ctx, Success, "")
+	git.WriteLog(&ctx, logger.Done, "")
 }
