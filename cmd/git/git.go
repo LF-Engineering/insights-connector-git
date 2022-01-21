@@ -586,7 +586,7 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 		shared.Printf("AddLogger error: %+v", err)
 		return
 	}
-	logProvider, err := logger.NewLogger(client, os.Getenv("ENV"))
+	logProvider, err := logger.NewLogger(client, os.Getenv("STAGE"))
 	if err != nil {
 		shared.Printf("AddLogger error: %+v", err)
 		return
