@@ -1,0 +1,139 @@
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: circleci/golang:1.13-stretch-node
+    working_directory: /go/src/github.com/LF-Engineering/insights-connector-git
+    steps:
+      - checkout
+      - run:
+          name: setup GITHUB token for private repositories
+          command: git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/LF-Engineering".insteadOf "https://github.com/LF-Engineering"
+      - run:
+          name: Build Executable
+          command: make git
+      - setup_remote_docker
+      - persist_to_workspace:
+          root: ./
+          paths:
+            - git
+            - gitops
+            - detect-removed-commits.sh
+
+  deploy: &deploy
+    docker:
+      - image: cimg/python:3.10.1-node
+    steps:
+      - checkout
+      - setup_remote_docker
+      - attach_workspace:
+          at: ./
+      - run:
+          name: Install awscli
+          command: pip install awscli
+      - run:
+          name: Setup AWS key
+          command: |
+            eval "echo 'export AWS_ACCESS_KEY_ID=\$$AWS_ACCESS_KEY_ID_ENV_VAR'" >> $BASH_ENV
+            eval "echo 'export AWS_SECRET_ACCESS_KEY=\$$AWS_SECRET_ACCESS_KEY_ENV_VAR'" >> $BASH_ENV
+            eval "echo 'export AWS_ACCOUNT_ID=\$$AWS_ACCOUNT_ID_ENV_VAR'" >> $BASH_ENV
+            eval "echo 'export AWS_DEFAULT_REGION=\$$AWS_REGION_ENV_VAR'" >> $BASH_ENV
+      - run:
+          name: Setup common environment variables
+          command: |
+            echo 'export FULL_IMAGE_NAME="${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/insights-connector-git:${TAG}"' >> $BASH_ENV
+      - run:
+          name: Authenticate ECR
+          command: |
+            aws ecr get-login-password | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID_ENV_VAR}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+      - run:
+          name: setup the docker repository to be able to push image in aws (should succeed on first time & allowed to fail later)
+          command: |
+            aws ecr create-repository --repository-name insights-connector-git || true
+      - run:
+          name: Build image
+          command: |
+            docker build -t $FULL_IMAGE_NAME .
+      - run:
+          name: Push image
+          command: |
+            docker push $FULL_IMAGE_NAME
+  deploy_dev:
+    <<: *deploy
+    environment:
+      AWS_REGION_ENV_VAR: AWS_REGION_DEV
+      AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_DEV
+      AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_DEV
+      AWS_ACCOUNT_ID_ENV_VAR: "395594542180"
+      GITHUB_TOKEN: GITHUB_TOKEN
+      STAGE: dev
+      TAG: latest
+
+  deploy_test:
+    <<: *deploy
+    environment:
+      AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_TEST
+      AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_TEST
+      AWS_ACCOUNT_ID_ENV_VAR: AWS_ACCOUNT_ID_TEST
+      AWS_REGION_ENV_VAR: AWS_REGION_TEST
+      GITHUB_TOKEN: GITHUB_TOKEN
+      STAGE: test
+      TAG: test
+
+  deploy_prod:
+    <<: *deploy
+    environment:
+      AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_PROD
+      AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_PROD
+      AWS_ACCOUNT_ID_ENV_VAR: AWS_ACCOUNT_ID_PROD
+      AWS_REGION_ENV_VAR: AWS_REGION_PROD
+      GITHUB_TOKEN: GITHUB_TOKEN
+      STAGE: prod
+      TAG: stable
+
+workflows:
+  build-connector:
+    jobs:
+      - build
+      - deploy_dev:
+          requires:
+            - build
+          filters:
+            branches:
+              only: main
+            tags:
+              ignore: /.*/
+      - approve_test:
+          type: approval
+          requires:
+            - build
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+(\.\d+)?(\.\d+)?$/
+      - deploy_test:
+          requires:
+            - approve_test
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+(\.\d+)?(\.\d+)?$/
+      - approve_prod:
+          type: approval
+          requires:
+            - build
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+(\.\d+)?(\.\d+)?$/
+      - deploy_prod:
+          requires:
+            - approve_prod
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+(\.\d+)?(\.\d+)?$/
