@@ -25,6 +25,8 @@ import (
 	"github.com/LF-Engineering/lfx-event-schema/service/user"
 
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
+	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights/git"
 	jsoniter "github.com/json-iterator/go"
@@ -78,6 +80,12 @@ const (
 	CommitCreated = "commit.created"
 	// CommitUpdated commit updated event
 	CommitUpdated = "commit.updated"
+	// InProgress status
+	InProgress = "in_progress"
+	// Failed status
+	Failed = "failed"
+	// Success status
+	Success = "success"
 	// GitConnector ...
 	GitConnector = "git-connector"
 )
@@ -556,15 +564,50 @@ type DSGit struct {
 	// PairProgramming mode
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
-	CommitsHash map[string]map[string]struct{}
+	CommitsHash     map[string]map[string]struct{}
 	// Publisher & stream
 	Publisher
-	Stream string // stream to publish the data
+	Stream          string // stream to publish the data
+	Logger          logger.Logger
 }
 
 // AddPublisher - sets Kinesis publisher
 func (j *DSGit) AddPublisher(publisher Publisher) {
 	j.Publisher = publisher
+}
+
+func (j *DSGit) AddLogger(ctx *shared.Ctx) {
+	client, err := elastic.NewClientProvider(&elastic.Params{
+		URL:      os.Getenv("ELASTIC_LOG_URL"),
+		Password: os.Getenv("ELASTIC_LOG_PASSWORD"),
+		Username: os.Getenv("ELASTIC_LOG_USER"),
+	})
+	if err != nil {
+		shared.Printf("AddLogger error: %+v", err)
+		return
+	}
+	logProvider, err := logger.NewLogger(client, os.Getenv("STAGE"))
+	if err != nil {
+		shared.Printf("AddLogger error: %+v", err)
+		return
+	}
+	j.Logger = *logProvider
+}
+
+func (j *DSGit) WriteLog(ctx *shared.Ctx, status, message string) {
+	_ = j.Logger.Write(&logger.Log{
+		Connector:     GitDataSource,
+		Configuration: []map[string]string{
+			{
+				"REPO_URL": j.URL,
+				"ES_URL": ctx.ESURL,
+				"ProjectSlug": ctx.Project,
+			}},
+		Status:        status,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+		Message:       message,
+	})
 }
 
 // AddFlags - add git specific flags
@@ -682,6 +725,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		datalakeClient := datalake.NewStoreClient(&objectStore)
 		j.AddPublisher(&datalakeClient)
 	}
+	j.AddLogger(ctx)
 	return
 }
 
@@ -2462,9 +2506,12 @@ func main() {
 		shared.Printf("Error: %+v\n", err)
 		return
 	}
+	git.WriteLog(&ctx, logger.InProgress, "")
 	err = git.Sync(&ctx)
 	if err != nil {
 		shared.Printf("Error: %+v\n", err)
+		git.WriteLog(&ctx, logger.Failed, err.Error())
 		return
 	}
+	git.WriteLog(&ctx, logger.Done, "")
 }

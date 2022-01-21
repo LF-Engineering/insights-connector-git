@@ -3,10 +3,11 @@ module github.com/LF-Engineering/insights-datasource-git
 go 1.15
 
 require (
-	github.com/LF-Engineering/insights-datasource-shared v1.1.2
+	github.com/LF-Engineering/insights-datasource-shared v1.2.0
 	github.com/LF-Engineering/lfx-event-schema v0.1.1
 	github.com/aws/aws-lambda-go v1.27.1
 	github.com/aws/aws-sdk-go v1.42.25
+	github.com/elastic/go-elasticsearch/v8 v8.0.0-alpha // indirect
 	github.com/json-iterator/go v1.1.11
 	github.com/kr/text v0.2.0 // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
