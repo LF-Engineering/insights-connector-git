@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/lfx-event-schema/service"
 	"io"
 	"math"
 	"net/url"
@@ -17,7 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LF-Engineering/lfx-event-schema/service/itx/repository"
+	"github.com/LF-Engineering/lfx-event-schema/service"
+
+	"github.com/LF-Engineering/lfx-event-schema/service/repository"
 	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -564,11 +565,11 @@ type DSGit struct {
 	// PairProgramming mode
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
-	CommitsHash     map[string]map[string]struct{}
+	CommitsHash map[string]map[string]struct{}
 	// Publisher & stream
 	Publisher
-	Stream          string // stream to publish the data
-	Logger          logger.Logger
+	Stream string // stream to publish the data
+	Logger logger.Logger
 }
 
 // AddPublisher - sets Kinesis publisher
@@ -576,6 +577,7 @@ func (j *DSGit) AddPublisher(publisher Publisher) {
 	j.Publisher = publisher
 }
 
+// AddLogger - adds logger
 func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 	client, err := elastic.NewClientProvider(&elastic.Params{
 		URL:      os.Getenv("ELASTIC_LOG_URL"),
@@ -594,19 +596,20 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 	j.Logger = *logProvider
 }
 
+// WriteLog - writes to log
 func (j *DSGit) WriteLog(ctx *shared.Ctx, status, message string) {
 	_ = j.Logger.Write(&logger.Log{
-		Connector:     GitDataSource,
+		Connector: GitDataSource,
 		Configuration: []map[string]string{
 			{
-				"REPO_URL": j.URL,
-				"ES_URL": ctx.ESURL,
+				"REPO_URL":    j.URL,
+				"ES_URL":      ctx.ESURL,
 				"ProjectSlug": ctx.Project,
 			}},
-		Status:        status,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-		Message:       message,
+		Status:    status,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Message:   message,
 	})
 }
 
@@ -929,7 +932,11 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	if ok {
 		hsh, _ = comm.(string)
 		rich["hash"] = hsh
-		rich["hash_short"] = hsh[:6]
+		if len(hsh) > 7 {
+			rich["hash_short"] = hsh[:7]
+		} else {
+			rich["hash_short"] = hsh
+		}
 	} else {
 		rich["hash"] = nil
 	}
@@ -1130,7 +1137,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		Source:           insights.GitSource,
 	}
 	baseEvent := service.BaseEvent{
-		Type:     CommitCreated,
+		Type: CommitCreated,
 		CRUDInfo: service.CRUDInfo{
 			CreatedBy: GitConnector,
 			UpdatedBy: GitConnector,
@@ -1148,6 +1155,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.ShortHash, _ = doc["hash_short"].(string)
 		source, _ := doc["commit_repo_type"].(string)
 		commit.Message, _ = doc["message"].(string)
+		commit.Origin = git.CommitOrigin(source)
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
@@ -1667,13 +1675,14 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				err := j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+				err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
-          // FIXME: shouldn't we return here (after error)?
+					return
 				}
 			} else {
-				jsonBytes, err := jsoniter.Marshal(data)
+				var jsonBytes []byte
+				jsonBytes, err = jsoniter.Marshal(data)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 					return
