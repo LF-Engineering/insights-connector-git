@@ -1131,11 +1131,6 @@ func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error)
 // GetModelData - return data in swagger format
 func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCreatedEvent {
 	data := make([]git.CommitCreatedEvent, 0)
-	commitBaseEvent := git.CommitBaseEvent{
-		Connector:        insights.GitConnector,
-		ConnectorVersion: GitBackendVersion,
-		Source:           insights.GitSource,
-	}
 	baseEvent := service.BaseEvent{
 		Type: CommitCreated,
 		CRUDInfo: service.CRUDInfo{
@@ -1144,6 +1139,10 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 			CreatedAt: time.Now().Unix(),
 			UpdatedAt: time.Now().Unix(),
 		},
+	}
+	commitBaseEvent := git.CommitBaseEvent{
+		Connector:        insights.GitConnector,
+		ConnectorVersion: GitBackendVersion,
 	}
 	for _, iDoc := range docs {
 		commit := git.Commit{}
@@ -1154,8 +1153,8 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.DefaultBranch, _ = doc["is_default_branch"].(bool)
 		commit.ShortHash, _ = doc["hash_short"].(string)
 		source, _ := doc["commit_repo_type"].(string)
+		commitBaseEvent.Source = insights.Source(source)
 		commit.Message, _ = doc["message"].(string)
-		commit.Origin = git.CommitOrigin(source)
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
