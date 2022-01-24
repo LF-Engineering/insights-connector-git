@@ -1177,12 +1177,29 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		identsAry, okIdents := doc["idents"].([][3]string)
 		identTypesAry, okIdentTypes := doc["ident_types"].([]string)
 		if okIdents && okIdentTypes {
+			// In pair programming mode co_author need to have custom weight
+			ppCoAuthorWeight := 1.0
+			if j.PairProgramming {
+				nCoAuthors := 0
+				for _, identType := range identTypesAry {
+					if identType == "co_author" {
+						nCoAuthors++
+					}
+				}
+				if nCoAuthors > 1 {
+					ppCoAuthorWeight /= float64(nCoAuthors)
+				}
+			}
 			for i := range identTypesAry {
 				commitRole := insights.Contributor{}
 				ident := identsAry[i]
 				identType := identTypesAry[i]
 				commitRole.Role = insights.Role(identType)
-				commitRole.Weight = 1.0
+				if j.PairProgramming && identType == "co_author" {
+					commitRole.Weight = ppCoAuthorWeight
+				} else {
+					commitRole.Weight = 1.0
+				}
 				name := ident[0]
 				username := ""
 				email := ident[2]
