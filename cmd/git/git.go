@@ -1216,7 +1216,8 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				name := ident[0]
 				username := ""
 				email := ident[2]
-				name, username = shared.PostprocessNameUsername(name, username, email)
+				// No identity data postprocessing in V2
+				// name, username = shared.PostprocessNameUsername(name, username, email)
 				userID, err := user.GenerateIdentity(&source, &email, &name, &username)
 				if err != nil {
 					shared.Printf("GenerateIdentity %+v", err)
