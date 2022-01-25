@@ -734,7 +734,9 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 
 // GetCommitURL - return git commit URL for a given path and SHA
 func (j *DSGit) GetCommitURL(origin, hash string) (string, string) {
-	if strings.Contains(origin, "github.com") {
+	if strings.HasPrefix(origin, "git://") {
+		return strings.Replace(origin, "git://", "http://", 1), "git"
+	} else if strings.Contains(origin, "github.com") {
 		return origin + "/commit/" + hash, "github"
 	} else if strings.Contains(origin, "gitlab.com") {
 		return origin + "/-/commit/" + hash, "gitlab"
