@@ -1195,7 +1195,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 			if j.PairProgramming {
 				nCoAuthors := 0
 				for _, identType := range identTypesAry {
-					if identType == "co_author" {
+					if identType == "co_author" || identType == "author" {
 						nCoAuthors++
 					}
 				}
@@ -1208,7 +1208,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				ident := identsAry[i]
 				identType := identTypesAry[i]
 				commitRole.Role = insights.Role(identType)
-				if j.PairProgramming && identType == "co_author" {
+				if j.PairProgramming && (identType == "co_author" || identType == "author") {
 					commitRole.Weight = ppCoAuthorWeight
 				} else {
 					commitRole.Weight = 1.0
