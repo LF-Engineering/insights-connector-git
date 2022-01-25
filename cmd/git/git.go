@@ -562,6 +562,7 @@ type DSGit struct {
 	OrphanedMap     map[string]struct{}               // orphaned commits SHAs
 	DefaultBranch   string                            // default branch name, example: master, main
 	Branches        map[string]struct{}               // all branches
+	CurrentSHA      string                            // SHA of currently processing commit
 	// PairProgramming mode
 	PairProgramming bool
 	// CommitsHash is a map of commit hashes for each repo
@@ -570,6 +571,14 @@ type DSGit struct {
 	Publisher
 	Stream string // stream to publish the data
 	Logger logger.Logger
+}
+
+// PublisherPushEvents - this is a fake function to test publisher locally
+// FIXME: don't use when done implementing
+func (j *DSGit) PublisherPushEvents(ev, ori, src, cat, env string, v []interface{}) error {
+	data, err := jsoniter.Marshal(v)
+	shared.Printf("publish[ev=%s ori=%s src=%s cat=%s env=%s]: %d items: %+v -> %v\n", ev, ori, src, cat, env, len(v), string(data), err)
+	return nil
 }
 
 // AddPublisher - sets Kinesis publisher
@@ -1887,6 +1896,7 @@ func (j *DSGit) ParseCommit(ctx *shared.Ctx, line string) (parsed bool, err erro
 		err = fmt.Errorf("expecting commit on line %d: '%s'", j.CurrLine, line)
 		return
 	}
+	j.CurrentSHA = m["commit"]
 	parentsAry := []string{}
 	refsAry := []string{}
 	parents, parentsPresent := m["parents"]
@@ -1904,7 +1914,7 @@ func (j *DSGit) ParseCommit(ctx *shared.Ctx, line string) (parsed bool, err erro
 		}
 	}
 	j.Commit = make(map[string]interface{})
-	j.Commit["commit"] = m["commit"]
+	j.Commit["commit"] = j.CurrentSHA
 	j.Commit["parents"] = parentsAry
 	j.Commit["refs"] = refsAry
 	if len(refsAry) > 0 {
@@ -1968,10 +1978,16 @@ func (j *DSGit) BuildCommit(ctx *shared.Ctx) (commit map[string]interface{}) {
 	for _, f := range sf {
 		d := j.CommitFiles[f]
 		ks = []string{}
+		if ctx.Debug > 1 {
+			shared.Printf("%s: '%s'->%+v\n", j.CurrentSHA, f, d)
+		}
 		for k, v := range d {
 			if v == nil {
 				ks = append(ks, k)
 			}
+		}
+		if ctx.Debug > 1 {
+			shared.Printf("%s: delete %+v\n", j.CurrentSHA, ks)
 		}
 		for _, k := range ks {
 			delete(d, k)
@@ -1988,15 +2004,22 @@ func (j *DSGit) BuildCommit(ctx *shared.Ctx) (commit map[string]interface{}) {
 // ParseStats - parse stats line
 func (j *DSGit) ParseStats(ctx *shared.Ctx, data map[string]string) {
 	fileName := j.ExtractPrevFileName(data["file"])
-	_, ok := j.CommitFiles[fileName]
+	if ctx.Debug > 1 {
+		shared.Printf("%s: '%s' --> '%s'\n", j.CurrentSHA, data["file"], fileName)
+	}
+	prevData, ok := j.CommitFiles[fileName]
+	prevAdded, prevRemoved := 0, 0
 	if !ok {
 		j.CommitFiles[fileName] = make(map[string]interface{})
 		j.CommitFiles[fileName]["file"] = fileName
+	} else {
+		prevAdded, _ = prevData["added"].(int)
+		prevRemoved, _ = prevData["removed"].(int)
 	}
 	added, _ := strconv.Atoi(data["added"])
 	removed, _ := strconv.Atoi(data["removed"])
-	j.CommitFiles[fileName]["added"] = added
-	j.CommitFiles[fileName]["removed"] = removed
+	j.CommitFiles[fileName]["added"] = prevAdded + added
+	j.CommitFiles[fileName]["removed"] = prevRemoved + removed
 }
 
 // ParseFile - parse file state
@@ -2014,7 +2037,6 @@ func (j *DSGit) ParseFile(ctx *shared.Ctx, line string) (parsed, empty bool, err
 	}
 	m = shared.MatchGroups(GitStatsPattern, line)
 	if len(m) > 0 {
-
 		j.ParseStats(ctx, m)
 		parsed = true
 		return
