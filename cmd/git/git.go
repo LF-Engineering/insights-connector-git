@@ -736,7 +736,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 func (j *DSGit) GetCommitURL(origin, hash string) (string, string) {
 	if strings.HasPrefix(origin, "git://") {
 		return strings.Replace(origin, "git://", "http://", 1) + "/commit/?id=" + hash, "git"
-	} else if strings.Contains(origin, "http://git.") || strings.Contains(origin, "https://git.") {
+	} else if strings.HasPrefix(origin, "http://git.") || strings.HasPrefix(origin, "https://git.") {
 		return origin + "/commit/?id=" + hash, "git"
 	} else if strings.Contains(origin, "github.com") {
 		return origin + "/commit/" + hash, "github"
