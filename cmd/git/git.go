@@ -576,8 +576,8 @@ type DSGit struct {
 // PublisherPushEvents - this is a fake function to test publisher locally
 // FIXME: don't use when done implementing
 func (j *DSGit) PublisherPushEvents(ev, ori, src, cat, env string, v []interface{}) error {
-	data, _ := jsoniter.Marshal(v)
-	shared.Printf("publish[ev=%s ori=%s src=%s cat=%s env=%s]: %d items: %+v\n", ev, ori, src, cat, env, len(v), string(data))
+	data, err := jsoniter.Marshal(v)
+	shared.Printf("publish[ev=%s ori=%s src=%s cat=%s env=%s]: %d items: %+v -> %v\n", ev, ori, src, cat, env, len(v), string(data), err)
 	return nil
 }
 
