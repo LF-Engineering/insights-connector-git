@@ -725,7 +725,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 	}
 	if ctx.Debug > 1 {
 		m := &git.Commit{}
-		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
+		shared.Printf("git: %+v\nshared context: %s\nModel: %+v\n", j, ctx.Info(), m)
 	}
 	if j.Stream != "" {
 		sess, err := session.NewSession()
@@ -769,7 +769,10 @@ func (j *DSGit) GetCommitURL(origin, hash string) (string, string) {
 		project := strings.Replace(u.Path, "/gerrit/", "", -1)
 		project = strings.Replace(project, "/r/", "", -1)
 		project = strings.TrimLeft(project, "/")
-		projectURL := "p=" + project + ".git"
+		projectURL := "p=" + project
+		if !strings.HasSuffix(project, ".git") {
+			project += ".git"
+		}
 		typeURL := "a=commit"
 		hashURL := "h=" + hash
 		return baseURL + "/" + vURL + "?" + projectURL + ";" + typeURL + ";" + hashURL, "gerrit"
