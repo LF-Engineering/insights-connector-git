@@ -725,7 +725,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 	}
 	if ctx.Debug > 1 {
 		m := &git.Commit{}
-		shared.Printf("git: %+v\nshared context: %s\nModel: %+v", j, ctx.Info(), m)
+		shared.Printf("git: %+v\nshared context: %s\nModel: %+v\n", j, ctx.Info(), m)
 	}
 	if j.Stream != "" {
 		sess, err := session.NewSession()
