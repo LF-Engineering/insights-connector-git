@@ -606,7 +606,7 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 }
 
 // WriteLog - writes to log
-func (j *DSGit) WriteLog(ctx *shared.Ctx, status, message string) {
+func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message string) {
 	_ = j.Logger.Write(&logger.Log{
 		Connector: GitDataSource,
 		Configuration: []map[string]string{
@@ -615,8 +615,7 @@ func (j *DSGit) WriteLog(ctx *shared.Ctx, status, message string) {
 				"ProjectSlug": ctx.Project,
 			}},
 		Status:    status,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt: timestamp,
 		Message:   message,
 	})
 }
@@ -2560,12 +2559,13 @@ func main() {
 		shared.Printf("Error: %+v\n", err)
 		return
 	}
-	git.WriteLog(&ctx, logger.InProgress, "")
+	timestamp := time.Now()
+	git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	err = git.Sync(&ctx)
 	if err != nil {
 		shared.Printf("Error: %+v\n", err)
-		git.WriteLog(&ctx, logger.Failed, err.Error())
+		git.WriteLog(&ctx, timestamp, logger.Failed, err.Error())
 		return
 	}
-	git.WriteLog(&ctx, logger.Done, "")
+	git.WriteLog(&ctx, timestamp, logger.Done, "")
 }
