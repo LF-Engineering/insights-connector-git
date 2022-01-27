@@ -1177,12 +1177,12 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		repoID, err := repository.GenerateRepositoryID(source, commit.RepositoryURL, "")
 		if err != nil {
-			shared.Printf("GenerateRepositoryID %+v", err)
+			shared.Printf("GenerateRepositoryID %+v\n", err)
 		}
 		commit.RepositoryID = repoID
 		commitID, err := git.GenerateCommitID(repoID, commit.SHA)
 		if err != nil {
-			shared.Printf("GenerateCommitID %+v", err)
+			shared.Printf("GenerateCommitID %+v\n", err)
 		}
 		commit.ID = commitID
 		commit.RepositoryURL, _ = doc["origin"].(string)
@@ -1223,7 +1223,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				// name, username = shared.PostprocessNameUsername(name, username, email)
 				userID, err := user.GenerateIdentity(&source, &email, &name, &username)
 				if err != nil {
-					shared.Printf("GenerateIdentity %+v", err)
+					shared.Printf("GenerateIdentity %+v\n", err)
 				}
 				commitRole.Identity = user.UserIdentityObjectBase{
 					ID:         userID,
