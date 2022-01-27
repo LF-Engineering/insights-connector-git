@@ -612,7 +612,6 @@ func (j *DSGit) WriteLog(ctx *shared.Ctx, status, message string) {
 		Configuration: []map[string]string{
 			{
 				"REPO_URL":    j.URL,
-				"ES_URL":      ctx.ESURL,
 				"ProjectSlug": ctx.Project,
 			}},
 		Status:    status,
