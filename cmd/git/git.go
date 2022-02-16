@@ -454,7 +454,7 @@ var (
 		"signed":                                         {"Signed-off-by"},
 		"signed-by":                                      {"Signed-off-by"},
 		"signed-off":                                     {"Signed-off-by"},
-		"signed-off-by":                                  {"Co-authored-by", "Signed-off-by"},
+		"signed-off-by":                                  {"Signed-off-by"},
 		"singend-off-by":                                 {"Co-authored-by"},
 		"slightly-grumpily-acked-by":                     {"Reviewed-by"},
 		"smoke-tested-by":                                {"Tested-by"},
