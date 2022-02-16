@@ -4,7 +4,7 @@ go 1.15
 
 require (
 	github.com/LF-Engineering/insights-datasource-shared v1.2.0
-	github.com/LF-Engineering/lfx-event-schema v0.1.2-0.20220127084830-c86856b9906e
+	github.com/LF-Engineering/lfx-event-schema v0.1.7-0.20220216062444-f40403810835
 	github.com/aws/aws-lambda-go v1.27.1
 	github.com/aws/aws-sdk-go v1.42.25
 	github.com/elastic/go-elasticsearch/v8 v8.0.0-alpha // indirect
