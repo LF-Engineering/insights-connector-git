@@ -1234,7 +1234,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				commitRoles = append(commitRoles, commitRole)
 			}
 		}
-		commit.Contributors = commitRoles
+		commit.Contributors = shared.DedupContributors(commitRoles)
 		fileCache := make(map[string]*git.CommitFilesByType)
 		fileAry, okFileAry := doc["file_data"].([]map[string]interface{})
 		if okFileAry {

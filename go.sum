@@ -3,6 +3,8 @@ github.com/LF-Engineering/insights-datasource-shared v1.2.0 h1:SE+yrui+GDv6vfVJr
 github.com/LF-Engineering/insights-datasource-shared v1.2.0/go.mod h1:5rFuev3hw1RzH+gLm35R6m4z83SKyDtQfuk+ifubN6Y=
 github.com/LF-Engineering/insights-datasource-shared v1.4.2-0.20220215074423-3319bf5a8e80 h1:A7lalLx7fUVJYM4osjUgG47L53iPVbFG20qokM4ZwOI=
 github.com/LF-Engineering/insights-datasource-shared v1.4.2-0.20220215074423-3319bf5a8e80/go.mod h1:5rFuev3hw1RzH+gLm35R6m4z83SKyDtQfuk+ifubN6Y=
+github.com/LF-Engineering/insights-datasource-shared v1.4.2-0.20220217065837-bcf98e828e86 h1:4aAkx7Z+SY2f6m4mLe9loXvWPgFW/cpRL+GE0wEiaJY=
+github.com/LF-Engineering/insights-datasource-shared v1.4.2-0.20220217065837-bcf98e828e86/go.mod h1:jsMDypZWu+ddxvKnSCZedkt+Qd9o/kjla7MVyswHNzg=
 github.com/LF-Engineering/lfx-event-schema v0.1.1 h1:01QYgZ5jJwJ7naKjknwC3brT5TcQRxoD1U4jLH5ojKI=
 github.com/LF-Engineering/lfx-event-schema v0.1.1/go.mod h1:GvEBmXvYGafFRIpZ6I0G5Ss4jsmkBNptLJIasLClXu8=
 github.com/LF-Engineering/lfx-event-schema v0.1.2-0.20220124053623-642a2e9ed5bf h1:+fk4CNJHNTiMwohdNtcIeX9qpqV4wVefyYlQOLNCN+k=
@@ -19,6 +21,8 @@ github.com/LF-Engineering/lfx-event-schema v0.1.2-0.20220127084830-c86856b9906e 
 github.com/LF-Engineering/lfx-event-schema v0.1.2-0.20220127084830-c86856b9906e/go.mod h1:GvEBmXvYGafFRIpZ6I0G5Ss4jsmkBNptLJIasLClXu8=
 github.com/LF-Engineering/lfx-event-schema v0.1.7-0.20220216062444-f40403810835 h1:aDeGjD+3cGRJHQEx/hFz7be5f84Jd9LKwBH6/cmfR00=
 github.com/LF-Engineering/lfx-event-schema v0.1.7-0.20220216062444-f40403810835/go.mod h1:GvEBmXvYGafFRIpZ6I0G5Ss4jsmkBNptLJIasLClXu8=
+github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220217061411-fc08702ce26c h1:ZFYTdRhwWu9o9OvrMMU4NLJnAPQiksCXYNkp0e01Fdo=
+github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220217061411-fc08702ce26c/go.mod h1:GvEBmXvYGafFRIpZ6I0G5Ss4jsmkBNptLJIasLClXu8=
 github.com/alecthomas/jsonschema v0.0.0-20210920000243-787cd8204a0d/go.mod h1:/n6+1/DWPltRLWL/VKyUxg6tzsl5kHUCcraimt4vr60=
 github.com/avast/retry-go v3.0.0+incompatible h1:4SOWQ7Qs+oroOTQOYnAHqelpCO0biHSxpiH9JdtuBj0=
 github.com/avast/retry-go v3.0.0+incompatible/go.mod h1:XtSnn+n/sHqQIpZ10K1qAevBhOOCWBLXXy3hyiqqBrY=
