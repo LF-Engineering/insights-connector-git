@@ -767,10 +767,10 @@ func (j *DSGit) GetCommitURL(origin, hash string) (string, string) {
 		project := strings.Replace(u.Path, "/gerrit/", "", -1)
 		project = strings.Replace(project, "/r/", "", -1)
 		project = strings.TrimLeft(project, "/")
-		projectURL := "p=" + project
 		if !strings.HasSuffix(project, ".git") {
 			project += ".git"
 		}
+		projectURL := "p=" + project
 		typeURL := "a=commit"
 		hashURL := "h=" + hash
 		return baseURL + "/" + vURL + "?" + projectURL + ";" + typeURL + ";" + hashURL, "gerrit"
