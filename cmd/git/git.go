@@ -1142,7 +1142,7 @@ func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error)
 	return
 }
 
-// GetModelData - return data in swagger format
+// GetModelData - return data in lfx-event-schema format
 func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCreatedEvent {
 	data := make([]git.CommitCreatedEvent, 0)
 	baseEvent := service.BaseEvent{
