@@ -454,7 +454,7 @@ var (
 		"signed":                                         {"Signed-off-by"},
 		"signed-by":                                      {"Signed-off-by"},
 		"signed-off":                                     {"Signed-off-by"},
-		"signed-off-by":                                  {"Signed-off-by"},
+		"signed-off-by":                                  {"Co-authored-by", "Signed-off-by"},
 		"singend-off-by":                                 {"Co-authored-by"},
 		"slightly-grumpily-acked-by":                     {"Reviewed-by"},
 		"smoke-tested-by":                                {"Tested-by"},
@@ -1142,6 +1142,26 @@ func (j *DSGit) SetParentCommitFlag(richItem map[string]interface{}) (err error)
 	return
 }
 
+func (j *DSGit) dedupAuthors(inContributors []insights.Contributor) (outContributors []insights.Contributor) {
+	authors := make(map[string]struct{})
+	for _, contributor := range inContributors {
+		if string(contributor.Role) == "author" {
+			authors[contributor.Identity.ID] = struct{}{}
+		}
+	}
+	for _, contributor := range inContributors {
+		if string(contributor.Role) != "co_author" {
+			outContributors = append(outContributors, contributor)
+			continue
+		}
+		_, found := authors[contributor.Identity.ID]
+		if !found {
+			outContributors = append(outContributors, contributor)
+		}
+	}
+	return
+}
+
 // GetModelData - return data in lfx-event-schema format
 func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCreatedEvent {
 	data := make([]git.CommitCreatedEvent, 0)
@@ -1234,7 +1254,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				commitRoles = append(commitRoles, commitRole)
 			}
 		}
-		commit.Contributors = shared.DedupContributors(commitRoles)
+		commit.Contributors = j.dedupAuthors(shared.DedupContributors(commitRoles))
 		fileCache := make(map[string]*git.CommitFilesByType)
 		fileAry, okFileAry := doc["file_data"].([]map[string]interface{})
 		if okFileAry {
