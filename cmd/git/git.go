@@ -1151,6 +1151,7 @@ func (j *DSGit) dedupAuthors(inContributors []insights.Contributor) (outContribu
 	}
 	for _, contributor := range inContributors {
 		if string(contributor.Role) != "co_author" {
+			outContributors = append(outContributors, contributor)
 			continue
 		}
 		_, found := authors[contributor.Identity.ID]
