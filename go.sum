@@ -29,6 +29,8 @@ github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220217061411-fc08702ce26c 
 github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220217061411-fc08702ce26c/go.mod h1:GvEBmXvYGafFRIpZ6I0G5Ss4jsmkBNptLJIasLClXu8=
 github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220218174420-9b6bda4ccec8 h1:TEyhWwKaz8N93NdF5QpRdXpXayQK2I8FcpHv6cjIbqg=
 github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220218174420-9b6bda4ccec8/go.mod h1:GvEBmXvYGafFRIpZ6I0G5Ss4jsmkBNptLJIasLClXu8=
+github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220221181508-8ada6508c44a h1:YDL9B23Q0+03DQRCKkyCyRZft3SrDC5NO1eYZfaOWbs=
+github.com/LF-Engineering/lfx-event-schema v0.1.8-0.20220221181508-8ada6508c44a/go.mod h1:GvEBmXvYGafFRIpZ6I0G5Ss4jsmkBNptLJIasLClXu8=
 github.com/alecthomas/jsonschema v0.0.0-20210920000243-787cd8204a0d/go.mod h1:/n6+1/DWPltRLWL/VKyUxg6tzsl5kHUCcraimt4vr60=
 github.com/avast/retry-go v3.0.0+incompatible h1:4SOWQ7Qs+oroOTQOYnAHqelpCO0biHSxpiH9JdtuBj0=
 github.com/avast/retry-go v3.0.0+incompatible/go.mod h1:XtSnn+n/sHqQIpZ10K1qAevBhOOCWBLXXy3hyiqqBrY=
