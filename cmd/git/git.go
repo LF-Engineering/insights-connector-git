@@ -2580,6 +2580,7 @@ func main() {
 		return
 	}
 	timestamp := time.Now()
+	shared.AddLogger(&git.Logger, GitDataSource, logger.Internal, []map[string]string{{"REPO_URL": git.URL, "ProjectSlug": ctx.Project}})
 	git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	err = git.Sync(&ctx)
 	if err != nil {
