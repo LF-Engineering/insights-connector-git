@@ -3,8 +3,8 @@ module github.com/LF-Engineering/insights-datasource-git
 go 1.15
 
 require (
-	github.com/LF-Engineering/insights-datasource-shared v1.4.2-0.20220224152615-5ab968e12d13
-	github.com/LF-Engineering/lfx-event-schema v0.1.9-0.20220224152659-db3f123a7df7
+	github.com/LF-Engineering/insights-datasource-shared v1.4.2-0.20220309073146-6f42257b2791
+	github.com/LF-Engineering/lfx-event-schema v0.1.9-0.20220309224940-67adf60a9f3b
 	github.com/aws/aws-lambda-go v1.27.1
 	github.com/aws/aws-sdk-go v1.42.25
 	github.com/elastic/go-elasticsearch/v8 v8.0.0-alpha // indirect
