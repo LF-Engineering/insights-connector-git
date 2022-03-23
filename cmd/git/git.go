@@ -1186,6 +1186,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.Branch, _ = doc["branch"].(string)
 		commit.DefaultBranch, _ = doc["is_default_branch"].(bool)
 		commit.ShortHash, _ = doc["hash_short"].(string)
+		commit.DocCommit, _ = doc["doc_commit"].(bool)
 		source, _ := doc["commit_repo_type"].(string)
 		commitBaseEvent.Source = insights.Source(source)
 		commit.Message, _ = doc["message"].(string)
