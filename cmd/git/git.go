@@ -34,6 +34,8 @@ import (
 )
 
 const (
+	// Connector name
+	Connector = "git"
 	// GitBackendVersion - backend version
 	GitBackendVersion = "0.1.1"
 	// GitDefaultReposPath - default path where git repository clones
@@ -546,6 +548,7 @@ type DSGit struct {
 	FlagCachePath        *string
 	FlagSkipCacheCleanup *bool
 	FlagStream           *string
+	FlagSourceID         *string
 	// Non-config variables
 	RepoName        string // repo name
 	Loc             int    // lines of code as reported by GitOpsCommand
@@ -571,6 +574,10 @@ type DSGit struct {
 	Publisher
 	Stream string // stream to publish the data
 	Logger logger.Logger
+	// SourceID: the optional external source identifier (such as the repo ID from github/gitlab, or gerrit project slug)
+	// this field is required for github, gitlab and gerrit. For github and gitlab, this is typically a numeric value
+	// converted to a string such as 194341141. For gerrit this is the project (repository) slug.
+	SourceID string
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -627,6 +634,7 @@ func (j *DSGit) AddFlags() {
 	j.FlagCachePath = flag.String("git-cache-path", GitDefaultCachePath, "path to store gitops results cache, defaults to"+GitDefaultCachePath)
 	j.FlagSkipCacheCleanup = flag.Bool("git-skip-cache-cleanup", false, "skip gitops cache cleanup")
 	j.FlagStream = flag.String("git-stream", GitDefaultStream, "git kinesis stream name, for example PUT-S3-git-commits")
+	j.FlagSourceID = flag.String("source-id", "", "repository source id")
 }
 
 // ParseArgs - parse git specific environment variables
@@ -680,6 +688,11 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	j.PairProgramming = true
 	j.CommitsHash = make(map[string]map[string]struct{})
 	j.OrphanedMap = make(map[string]struct{})
+
+	// git repository sourceID
+	if shared.FlagPassed(ctx, "source-id") {
+		j.SourceID = *j.FlagSourceID
+	}
 
 	return
 }
@@ -1194,7 +1207,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		repoID, err := repository.GenerateRepositoryID(source, commit.RepositoryURL, "")
+		repoID, err := repository.GenerateRepositoryID(j.SourceID, commit.RepositoryURL, Connector)
 		if err != nil {
 			shared.Printf("GenerateRepositoryID %+v\n", err)
 		}
