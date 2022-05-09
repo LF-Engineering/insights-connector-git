@@ -632,7 +632,7 @@ func (j *DSGit) AddFlags() {
 	j.FlagCachePath = flag.String("git-cache-path", GitDefaultCachePath, "path to store gitops results cache, defaults to"+GitDefaultCachePath)
 	j.FlagSkipCacheCleanup = flag.Bool("git-skip-cache-cleanup", false, "skip gitops cache cleanup")
 	j.FlagStream = flag.String("git-stream", GitDefaultStream, "git kinesis stream name, for example PUT-S3-git-commits")
-	j.FlagSourceID = flag.String("source-id", "", "repository source id")
+	j.FlagSourceID = flag.String("git-source-id", "", "repository source id")
 }
 
 // ParseArgs - parse git specific environment variables
