@@ -639,7 +639,7 @@ func (j *DSGit) AddFlags() {
 func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	// git URL
 	if shared.FlagPassed(ctx, "url") && *j.FlagURL != "" {
-		j.URL = *j.FlagURL
+		j.URL = strings.TrimSpace(*j.FlagURL)
 	}
 	if ctx.EnvSet("URL") {
 		j.URL = ctx.Env("URL")
@@ -689,7 +689,7 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 
 	// git repository sourceID
 	if shared.FlagPassed(ctx, "source-id") {
-		j.SourceID = *j.FlagSourceID
+		j.SourceID = strings.TrimSpace(*j.FlagSourceID)
 	}
 
 	return
@@ -1189,6 +1189,11 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		Connector:        insights.GitConnector,
 		ConnectorVersion: GitBackendVersion,
 	}
+	repoID, err := repository.GenerateRepositoryID(j.SourceID, j.URL, GitDataSource)
+	if err != nil {
+		shared.Printf("GenerateRepositoryID %+v\n", err)
+	}
+
 	for _, iDoc := range docs {
 		commit := git.Commit{}
 		doc, _ := iDoc.(map[string]interface{})
@@ -1205,10 +1210,6 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		repoID, err := repository.GenerateRepositoryID(j.SourceID, j.URL, GitDataSource)
-		if err != nil {
-			shared.Printf("GenerateRepositoryID %+v\n", err)
-		}
 		commit.RepositoryID = repoID
 		commitID, err := git.GenerateCommitID(repoID, commit.SHA)
 		if err != nil {
