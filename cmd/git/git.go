@@ -34,8 +34,6 @@ import (
 )
 
 const (
-	// Connector name
-	Connector = "git"
 	// GitBackendVersion - backend version
 	GitBackendVersion = "0.1.1"
 	// GitDefaultReposPath - default path where git repository clones
@@ -1207,7 +1205,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		repoID, err := repository.GenerateRepositoryID(j.SourceID, commit.RepositoryURL, Connector)
+		repoID, err := repository.GenerateRepositoryID(j.SourceID, commit.RepositoryURL, GitDataSource)
 		if err != nil {
 			shared.Printf("GenerateRepositoryID %+v\n", err)
 		}
