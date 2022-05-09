@@ -1205,7 +1205,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		repoID, err := repository.GenerateRepositoryID(j.SourceID, commit.RepositoryURL, GitDataSource)
+		repoID, err := repository.GenerateRepositoryID(j.SourceID, j.URL, GitDataSource)
 		if err != nil {
 			shared.Printf("GenerateRepositoryID %+v\n", err)
 		}
