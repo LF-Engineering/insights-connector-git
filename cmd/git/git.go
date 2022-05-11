@@ -546,6 +546,7 @@ type DSGit struct {
 	FlagCachePath        *string
 	FlagSkipCacheCleanup *bool
 	FlagStream           *string
+	FlagSourceID         *string
 	// Non-config variables
 	RepoName        string // repo name
 	Loc             int    // lines of code as reported by GitOpsCommand
@@ -571,6 +572,10 @@ type DSGit struct {
 	Publisher
 	Stream string // stream to publish the data
 	Logger logger.Logger
+	// SourceID: the optional external source identifier (such as the repo ID from github/gitlab, or gerrit project slug)
+	// this field is required for github, gitlab and gerrit. For github and gitlab, this is typically a numeric value
+	// converted to a string such as 194341141. For gerrit this is the project (repository) slug.
+	SourceID string
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -627,13 +632,14 @@ func (j *DSGit) AddFlags() {
 	j.FlagCachePath = flag.String("git-cache-path", GitDefaultCachePath, "path to store gitops results cache, defaults to"+GitDefaultCachePath)
 	j.FlagSkipCacheCleanup = flag.Bool("git-skip-cache-cleanup", false, "skip gitops cache cleanup")
 	j.FlagStream = flag.String("git-stream", GitDefaultStream, "git kinesis stream name, for example PUT-S3-git-commits")
+	j.FlagSourceID = flag.String("git-source-id", "", "repository source id")
 }
 
 // ParseArgs - parse git specific environment variables
 func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	// git URL
 	if shared.FlagPassed(ctx, "url") && *j.FlagURL != "" {
-		j.URL = *j.FlagURL
+		j.URL = strings.TrimSpace(*j.FlagURL)
 	}
 	if ctx.EnvSet("URL") {
 		j.URL = ctx.Env("URL")
@@ -680,6 +686,11 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 	j.PairProgramming = true
 	j.CommitsHash = make(map[string]map[string]struct{})
 	j.OrphanedMap = make(map[string]struct{})
+
+	// git repository sourceID
+	if shared.FlagPassed(ctx, "source-id") {
+		j.SourceID = strings.TrimSpace(*j.FlagSourceID)
+	}
 
 	return
 }
@@ -1178,6 +1189,10 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		Connector:        insights.GitConnector,
 		ConnectorVersion: GitBackendVersion,
 	}
+	repoID, err := repository.GenerateRepositoryID(j.SourceID, shared.StripURL(j.URL), GitDataSource)
+	if err != nil {
+		shared.Printf("GenerateRepositoryID %+v\n", err)
+	}
 	for _, iDoc := range docs {
 		commit := git.Commit{}
 		doc, _ := iDoc.(map[string]interface{})
@@ -1195,10 +1210,6 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		commit.RepositoryURL, _ = doc["origin"].(string)
-		repoID, err := repository.GenerateRepositoryID(source, shared.StripURL(commit.RepositoryURL), "")
-		if err != nil {
-			shared.Printf("GenerateRepositoryID %+v\n", err)
-		}
 		commit.RepositoryID = repoID
 		commitID, err := git.GenerateCommitID(repoID, commit.SHA)
 		if err != nil {
