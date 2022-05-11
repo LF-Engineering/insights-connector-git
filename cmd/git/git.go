@@ -1194,7 +1194,8 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
-		repoID, err := repository.GenerateRepositoryID(source, commit.RepositoryURL, "")
+		commit.RepositoryURL, _ = doc["origin"].(string)
+		repoID, err := repository.GenerateRepositoryID(source, shared.StripURL(commit.RepositoryURL), "")
 		if err != nil {
 			shared.Printf("GenerateRepositoryID %+v\n", err)
 		}
@@ -1204,7 +1205,6 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 			shared.Printf("GenerateCommitID %+v\n", err)
 		}
 		commit.ID = commitID
-		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
 		createdOn := authoredDt
 		commit.SyncTimestamp = time.Now()
