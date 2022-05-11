@@ -1189,7 +1189,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		Connector:        insights.GitConnector,
 		ConnectorVersion: GitBackendVersion,
 	}
-	repoID, err := repository.GenerateRepositoryID(j.SourceID, shared.StripURL(j.URL), GitDataSource)
+	repoID, err := repository.GenerateRepositoryID(j.SourceID, j.URL, GitDataSource)
 	if err != nil {
 		shared.Printf("GenerateRepositoryID %+v\n", err)
 	}
