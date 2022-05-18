@@ -547,6 +547,7 @@ type DSGit struct {
 	FlagSkipCacheCleanup *bool
 	FlagStream           *string
 	FlagSourceID         *string
+	FlagRepositorySource *string
 	// Non-config variables
 	RepoName        string // repo name
 	Loc             int    // lines of code as reported by GitOpsCommand
@@ -576,6 +577,8 @@ type DSGit struct {
 	// this field is required for github, gitlab and gerrit. For github and gitlab, this is typically a numeric value
 	// converted to a string such as 194341141. For gerrit this is the project (repository) slug.
 	SourceID string
+	// RepositorySource for example git, github or gerrit
+	RepositorySource string
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -633,6 +636,7 @@ func (j *DSGit) AddFlags() {
 	j.FlagSkipCacheCleanup = flag.Bool("git-skip-cache-cleanup", false, "skip gitops cache cleanup")
 	j.FlagStream = flag.String("git-stream", GitDefaultStream, "git kinesis stream name, for example PUT-S3-git-commits")
 	j.FlagSourceID = flag.String("git-source-id", "", "repository source id")
+	j.FlagRepositorySource = flag.String("git-repository-source", "", "repository source for example git, github or gerrit")
 }
 
 // ParseArgs - parse git specific environment variables
@@ -692,6 +696,11 @@ func (j *DSGit) ParseArgs(ctx *shared.Ctx) (err error) {
 		j.SourceID = strings.TrimSpace(*j.FlagSourceID)
 	}
 
+	// git repository source
+	if shared.FlagPassed(ctx, "repository-source") {
+		j.RepositorySource = strings.TrimSpace(*j.FlagRepositorySource)
+	}
+
 	return
 }
 
@@ -714,6 +723,10 @@ func (j *DSGit) Validate() (err error) {
 	j.CachePath = os.ExpandEnv(j.CachePath)
 	if strings.HasSuffix(j.CachePath, "/") {
 		j.CachePath = j.CachePath[:len(j.CachePath)-1]
+	}
+	if j.RepositorySource == "" {
+		err = fmt.Errorf("repository source must be set, eg: git, github, gerrit")
+		return
 	}
 	return
 }
@@ -1189,7 +1202,8 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		Connector:        insights.GitConnector,
 		ConnectorVersion: GitBackendVersion,
 	}
-	repoID, err := repository.GenerateRepositoryID(j.SourceID, j.URL, GitDataSource)
+
+	repoID, err := repository.GenerateRepositoryID(j.SourceID, j.URL, j.RepositorySource)
 	if err != nil {
 		shared.Printf("GenerateRepositoryID %+v\n", err)
 	}
@@ -1251,7 +1265,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				email := ident[2]
 				// No identity data postprocessing in V2
 				// name, username = shared.PostprocessNameUsername(name, username, email)
-				userID, err := user.GenerateIdentity(&source, &email, &name, &username)
+				userID, err := user.GenerateIdentity(&j.RepositorySource, &email, &name, &username)
 				if err != nil {
 					shared.Printf("GenerateIdentity %+v\n", err)
 				}
@@ -1261,7 +1275,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 					Name:       name,
 					IsVerified: false,
 					Username:   username,
-					Source:     GitDataSource,
+					Source:     j.RepositorySource,
 				}
 				commitRoles = append(commitRoles, commitRole)
 			}
@@ -1738,7 +1752,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				for _, d := range data {
 					formattedData = append(formattedData, d)
 				}
-				err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+				err = j.Publisher.PushEvents(CommitCreated, "insights", j.RepositorySource, "commits", os.Getenv("STAGE"), formattedData)
 				if err != nil {
 					shared.Printf("Error: %+v\n", err)
 					return
