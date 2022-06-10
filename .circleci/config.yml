@@ -94,7 +94,10 @@ jobs:
 workflows:
   build-connector:
     jobs:
-      - build
+      - build:
+          filters:
+            tags:
+              only: /.*/
       - deploy_dev:
           requires:
             - build
