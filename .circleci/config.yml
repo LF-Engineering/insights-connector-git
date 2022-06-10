@@ -69,17 +69,6 @@ jobs:
       STAGE: dev
       TAG: latest
 
-  deploy_test:
-    <<: *deploy
-    environment:
-      AWS_ACCESS_KEY_ID_ENV_VAR: AWS_ACCESS_KEY_ID_TEST
-      AWS_SECRET_ACCESS_KEY_ENV_VAR: AWS_SECRET_ACCESS_KEY_TEST
-      AWS_ACCOUNT_ID_ENV_VAR: AWS_ACCOUNT_ID_TEST
-      AWS_REGION_ENV_VAR: AWS_REGION_TEST
-      GITHUB_TOKEN: GITHUB_TOKEN
-      STAGE: test
-      TAG: test
-
   deploy_prod:
     <<: *deploy
     environment:
@@ -106,23 +95,6 @@ workflows:
               only: main
             tags:
               ignore: /.*/
-      - approve_test:
-          type: approval
-          requires:
-            - build
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+(\.\d+)?(\.\d+)?$/
-      - deploy_test:
-          requires:
-            - approve_test
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+(\.\d+)?(\.\d+)?$/
       - approve_prod:
           type: approval
           requires:
