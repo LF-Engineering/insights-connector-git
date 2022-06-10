@@ -34,3 +34,4 @@ bin
 *.token
 *.secret
 *.log
+.idea
