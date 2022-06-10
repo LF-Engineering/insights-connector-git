@@ -94,7 +94,10 @@ jobs:
 workflows:
   build-connector:
     jobs:
-      - build
+      - build:
+          filters:
+            tags:
+              only: /.*/
       - deploy_dev:
           requires:
             - build
@@ -103,23 +106,6 @@ workflows:
               only: main
             tags:
               ignore: /.*/
-      - approve_test:
-          type: approval
-          requires:
-            - build
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+(\.\d+)?(\.\d+)?$/
-      - deploy_test:
-          requires:
-            - approve_test
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v\d+(\.\d+)?(\.\d+)?$/
       - approve_prod:
           type: approval
           requires:
