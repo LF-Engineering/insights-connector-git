@@ -16,21 +16,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LF-Engineering/lfx-event-schema/service"
-
-	"github.com/LF-Engineering/lfx-event-schema/service/repository"
-	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
-
-	"github.com/LF-Engineering/lfx-event-schema/service/user"
-
+	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
+	"github.com/LF-Engineering/lfx-event-schema/service"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights/git"
+	"github.com/LF-Engineering/lfx-event-schema/service/repository"
+	"github.com/LF-Engineering/lfx-event-schema/service/user"
+	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -579,13 +578,14 @@ type DSGit struct {
 	SourceID string
 	// RepositorySource for example git, github or gerrit
 	RepositorySource string
+	log              *logrus.Entry
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
 // FIXME: don't use when done implementing
 func (j *DSGit) PublisherPushEvents(ev, ori, src, cat, env string, v []interface{}) error {
 	data, err := jsoniter.Marshal(v)
-	shared.Printf("publish[ev=%s ori=%s src=%s cat=%s env=%s]: %d items: %+v -> %v\n", ev, ori, src, cat, env, len(v), string(data), err)
+	j.log.WithFields(logrus.Fields{"operation": "PublisherPushEvents"}).Errorf("publish[ev=%s ori=%s src=%s cat=%s env=%s]: %d items: %+v -> %v", ev, ori, src, cat, env, len(v), string(data), err)
 	return nil
 }
 
@@ -602,12 +602,12 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 		Username: os.Getenv("ELASTIC_LOG_USER"),
 	})
 	if err != nil {
-		shared.Printf("AddLogger error: %+v", err)
+		j.log.WithFields(logrus.Fields{"operation": "AddLogger"}).Errorf("create elastic provider error: %+v", err)
 		return
 	}
 	logProvider, err := logger.NewLogger(client, os.Getenv("STAGE"))
 	if err != nil {
-		shared.Printf("AddLogger error: %+v", err)
+		j.log.WithFields(logrus.Fields{"operation": "AddLogger"}).Errorf("create logger provider error: %+v", err)
 		return
 	}
 	j.Logger = *logProvider
@@ -760,6 +760,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		j.AddPublisher(&datalakeClient)
 	}
 	j.AddLogger(ctx)
+	j.createStructuredLogger(ctx)
 	return
 }
 
@@ -778,7 +779,7 @@ func (j *DSGit) GetCommitURL(origin, hash string) (string, string) {
 	} else if strings.Contains(origin, "gerrit") || strings.Contains(origin, "review") {
 		u, err := url.Parse(origin)
 		if err != nil {
-			shared.Printf("cannot parse git commit origin: '%s'\n", origin)
+			j.log.WithFields(logrus.Fields{"operation": "GetCommitURL"}).Error(fmt.Errorf("cannot parse git commit origin: '%s'", origin))
 			return origin + "/" + hash, "unknown"
 		}
 		baseURL := u.Scheme + "://" + u.Host
@@ -855,13 +856,13 @@ func (j *DSGit) GetOtherTrailersAuthors(ctx *shared.Ctx, doc interface{}) (other
 					iCommitAuthor, _ := shared.Dig(doc, []string{"data", "Author"}, true, false)
 					commitAuthor = strings.TrimSpace(iCommitAuthor.(string))
 					if ctx.Debug > 1 {
-						shared.Printf("trailers type %s cannot have the same authors as commit's author %s, checking this\n", otherKey, commitAuthor)
+						j.log.WithFields(logrus.Fields{"operation": "GetOtherTrailersAuthors"}).Debugf("trailers type %s cannot have the same authors as commit's author %s, checking this", otherKey, commitAuthor)
 					}
 				}
 			}
 			others, _ := iothers.([]interface{})
 			if ctx.Debug > 1 {
-				shared.Printf("other trailers %s -> %s: %s\n", otherKey, otherRichKey, others)
+				j.log.WithFields(logrus.Fields{"operation": "GetOtherTrailersAuthors"}).Debugf("other trailers %s -> %s: %s", otherKey, otherRichKey, others)
 			}
 			if othersMap == nil {
 				othersMap = make(map[string]map[[2]string]struct{})
@@ -870,7 +871,7 @@ func (j *DSGit) GetOtherTrailersAuthors(ctx *shared.Ctx, doc interface{}) (other
 				other := strings.TrimSpace(iOther.(string))
 				if !sameAsAuthorAllowed && other == commitAuthor {
 					if ctx.Debug > 1 {
-						shared.Printf("trailer %s is the same as commit's author, and this isn't allowed for %s trailers, skipping\n", other, otherKey)
+						j.log.WithFields(logrus.Fields{"operation": "GetOtherTrailersAuthors"}).Debugf("trailer %s is the same as commit's author, and this isn't allowed for %s trailers, skipping", other, otherKey)
 					}
 					continue
 				}
@@ -1205,7 +1206,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 
 	repoID, err := repository.GenerateRepositoryID(j.SourceID, j.URL, j.RepositorySource)
 	if err != nil {
-		shared.Printf("GenerateRepositoryID %+v\n", err)
+		j.log.WithFields(logrus.Fields{"operation": "GetModelData"}).Error(fmt.Errorf("GenerateRepositoryID source id: %s, url: %s, source: %s.error:  %+v", j.SourceID, j.URL, j.RepositorySource, err))
 	}
 	for _, iDoc := range docs {
 		commit := git.Commit{}
@@ -1227,7 +1228,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		commit.RepositoryID = repoID
 		commitID, err := git.GenerateCommitID(repoID, commit.SHA)
 		if err != nil {
-			shared.Printf("GenerateCommitID %+v\n", err)
+			j.log.WithFields(logrus.Fields{"operation": "GetModelData"}).Error(fmt.Errorf("GenerateCommitID repo id: %s, commit sha: %s.error: %+v", repoID, commit.SHA, err))
 		}
 		commit.ID = commitID
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
@@ -1267,7 +1268,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				// name, username = shared.PostprocessNameUsername(name, username, email)
 				userID, err := user.GenerateIdentity(&j.RepositorySource, &email, &name, &username)
 				if err != nil {
-					shared.Printf("GenerateIdentity %+v\n", err)
+					j.log.WithFields(logrus.Fields{"operation": "GetModelData"}).Error(fmt.Errorf("GenerateIdentity source: %s, email: %s, name:%s, username:%s. error: %+v", j.RepositorySource, email, name, username, err))
 				}
 				commitRole.Identity = user.UserIdentityObjectBase{
 					ID:         userID,
@@ -1377,7 +1378,7 @@ func (j *DSGit) AddMetadata(ctx *shared.Ctx, item interface{}) (mItem map[string
 	mItem["metadata__timestamp"] = shared.ToESDate(timestamp)
 	// mItem[ProjectSlug] = ctx.ProjectSlug
 	if ctx.Debug > 1 {
-		shared.Printf("%s: %s: %v %v\n", origin, uuid, commitSHA, updatedOn)
+		j.log.WithFields(logrus.Fields{"operation": "AddMetadata"}).Debugf(fmt.Sprintf("origin: %s, uuid: %s, commit sha: %v, updated n: %v", origin, uuid, commitSHA, updatedOn))
 	}
 	return
 }
@@ -1405,9 +1406,9 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 		sout, serr, e = shared.ExecCommand(ctx, cmdLine, "", env)
 		if e != nil {
 			if GitOpsFailureFatal {
-				shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+				j.log.WithFields(logrus.Fields{"operation": "GetGitOps"}).Error(fmt.Errorf("error executing command: %v, error: %v, output: %s, error output: %s", cmdLine, e, sout, serr))
 			} else {
-				shared.Printf("WARNING: error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+				j.log.WithFields(logrus.Fields{"operation": "GetGitOps"}).Warningf("WARNING: error executing command: %v, error: %v, output: %s, error output: %s", cmdLine, e, sout, serr)
 				e = nil
 			}
 			return
@@ -1420,9 +1421,9 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 		e = jsoniter.Unmarshal([]byte(sout), &data)
 		if e != nil {
 			if GitOpsFailureFatal {
-				shared.Printf("error unmarshaling from %v\n", sout)
+				j.log.WithFields(logrus.Fields{"operation": "GetGitOps"}).Errorf("error unmarshaling from %v", sout)
 			} else {
-				shared.Printf("WARNING: error unmarshaling from %v\n", sout)
+				j.log.WithFields(logrus.Fields{"operation": "GetGitOps"}).Warningf("warning unmarshaling from %v", sout)
 				e = nil
 			}
 			return
@@ -1458,6 +1459,7 @@ func (j *DSGit) GetGitOps(ctx *shared.Ctx, thrN int) (ch chan error, err error) 
 // CreateGitRepo - clone git repo if needed
 func (j *DSGit) CreateGitRepo(ctx *shared.Ctx) (err error) {
 	info, err := os.Stat(j.GitPath)
+
 	var exists bool
 	if !os.IsNotExist(err) {
 		if info.IsDir() {
@@ -1469,24 +1471,24 @@ func (j *DSGit) CreateGitRepo(ctx *shared.Ctx) (err error) {
 	}
 	if !exists {
 		if ctx.Debug > 0 {
-			shared.Printf("cloning %s to %s\n", j.URL, j.GitPath)
+			j.log.WithFields(logrus.Fields{"operation": "CreateGitRepo"}).Debugf("cloning %s to %s", j.URL, j.GitPath)
 		}
 		cmdLine := []string{"git", "clone", "--bare", j.URL, j.GitPath}
 		env := map[string]string{"LANG": "C"}
 		var sout, serr string
 		sout, serr, err = shared.ExecCommand(ctx, cmdLine, "", env)
 		if err != nil {
-			shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, err, sout, serr)
+			j.log.WithFields(logrus.Fields{"operation": "CreateGitRepo"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
 			return
 		}
 		if ctx.Debug > 0 {
-			shared.Printf("cloned %s to %s\n", j.URL, j.GitPath)
+			j.log.WithFields(logrus.Fields{"operation": "CreateGitRepo"}).Debugf("cloned %s to %s", j.URL, j.GitPath)
 		}
 	}
 	headPath := j.GitPath + "/HEAD"
 	info, err = os.Stat(headPath)
 	if os.IsNotExist(err) {
-		shared.Printf("Missing %s file\n", headPath)
+		j.log.WithFields(logrus.Fields{"operation": "CreateGitRepo"}).Errorf("Missing %s file", headPath)
 		return
 	}
 	if info.IsDir() {
@@ -1498,17 +1500,17 @@ func (j *DSGit) CreateGitRepo(ctx *shared.Ctx) (err error) {
 // UpdateGitRepo - update git repo
 func (j *DSGit) UpdateGitRepo(ctx *shared.Ctx) (err error) {
 	if ctx.Debug > 0 {
-		shared.Printf("updating repo %s\n", j.URL)
+		j.log.WithFields(logrus.Fields{"operation": "CreateGitRepo"}).Debugf("updating repo %s", j.URL)
 	}
 	cmdLine := []string{"git", "fetch", "origin", "+refs/heads/*:refs/heads/*", "--prune"}
 	var sout, serr string
 	sout, serr, err = shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
 	if err != nil {
-		shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, err, sout, serr)
+		j.log.WithFields(logrus.Fields{"operation": "CreateGitRepo"}).Errorf("error executing %v: %v\n%s\n%s", cmdLine, err, sout, serr)
 		return
 	}
 	if ctx.Debug > 0 {
-		shared.Printf("updated repo %s\n", j.URL)
+		j.log.WithFields(logrus.Fields{"operation": "CreateGitRepo"}).Debugf("updated repo %s", j.URL)
 	}
 	return
 }
@@ -1518,7 +1520,7 @@ func (j *DSGit) UpdateGitRepo(ctx *shared.Ctx) (err error) {
 func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, err error) {
 	worker := func(c chan error) (e error) {
 		if ctx.Debug > 0 {
-			shared.Printf("searching for orphaned commits\n")
+			j.log.WithFields(logrus.Fields{"operation": "GetOrphanedCommits"}).Debug("searching for orphaned commits")
 		}
 		defer func() {
 			if c != nil {
@@ -1533,9 +1535,9 @@ func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, er
 		sout, serr, e = shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
 		if e != nil {
 			if OrphanedCommitsFailureFatal {
-				shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+				j.log.WithFields(logrus.Fields{"operation": "GetOrphanedCommits"}).Errorf("error executing %v: %v\n%s\n%s", cmdLine, e, sout, serr)
 			} else {
-				shared.Printf("WARNING: error executing %v: %v\n%s\n%s\n", cmdLine, e, sout, serr)
+				j.log.WithFields(logrus.Fields{"operation": "GetOrphanedCommits"}).Warningf("WARNING: error executing %v: %v\n%s\n%s", cmdLine, e, sout, serr)
 				e = nil
 			}
 			return
@@ -1549,9 +1551,9 @@ func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, er
 			j.OrphanedCommits = append(j.OrphanedCommits, sha)
 			j.OrphanedMap[sha] = struct{}{}
 		}
-		shared.Printf("found %d orphaned commits\n", len(j.OrphanedCommits))
+		j.log.WithFields(logrus.Fields{"operation": "GetOrphanedCommits"}).Infof("found %d orphaned commits", len(j.OrphanedCommits))
 		if ctx.Debug > 1 {
-			shared.Printf("OrphanedCommits: %+v\n", j.OrphanedCommits)
+			j.log.WithFields(logrus.Fields{"operation": "GetOrphanedCommits"}).Debugf("OrphanedCommits: %+v", j.OrphanedCommits)
 		}
 		return
 	}
@@ -1566,17 +1568,17 @@ func (j *DSGit) GetOrphanedCommits(ctx *shared.Ctx, thrN int) (ch chan error, er
 // GetGitBranches - get default git branch name
 func (j *DSGit) GetGitBranches(ctx *shared.Ctx) (err error) {
 	if ctx.Debug > 0 {
-		shared.Printf("get git branch data from %s\n", j.GitPath)
+		j.log.WithFields(logrus.Fields{"operation": "GetGitBranches"}).Debugf("get git branch data from %s", j.GitPath)
 	}
 	cmdLine := []string{"git", "branch", "-a"}
 	var sout, serr string
 	sout, serr, err = shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
 	if err != nil {
-		shared.Printf("error executing %v: %v\n%s\n%s\n", cmdLine, err, sout, serr)
+		j.log.WithFields(logrus.Fields{"operation": "GetGitBranches"}).Errorf("error executing %v: %v\n%s\n%s", cmdLine, err, sout, serr)
 		return
 	}
 	if ctx.Debug > 0 {
-		shared.Printf("git branch data for %s: %s\n", j.URL, sout)
+		j.log.WithFields(logrus.Fields{"operation": "GetGitBranches"}).Debugf("git branch data for %s: %s", j.URL, sout)
 	}
 	ary := strings.Split(sout, "\n")
 	j.Branches = make(map[string]struct{})
@@ -1586,19 +1588,19 @@ func (j *DSGit) GetGitBranches(ctx *shared.Ctx) (err error) {
 			continue
 		}
 		if ctx.Debug > 1 {
-			shared.Printf("branch: '%s'\n", branch)
+			j.log.WithFields(logrus.Fields{"operation": "GetGitBranches"}).Debugf("branch: '%s'", branch)
 		}
 		if strings.HasPrefix(branch, "* ") {
 			branch = branch[2:]
 			if ctx.Debug > 0 {
-				shared.Printf("Default branch: '%s'\n", branch)
+				j.log.WithFields(logrus.Fields{"operation": "GetGitBranches"}).Debugf("Default branch: '%s'", branch)
 			}
 			j.DefaultBranch = branch
 		}
 		j.Branches[branch] = struct{}{}
 	}
 	if ctx.Debug > 0 {
-		shared.Printf("Branches: %v\n", j.Branches)
+		j.log.WithFields(logrus.Fields{"operation": "GetGitBranches"}).Debugf("Branches: %v", j.Branches)
 	}
 	return
 }
@@ -1606,7 +1608,7 @@ func (j *DSGit) GetGitBranches(ctx *shared.Ctx) (err error) {
 // ParseGitLog - update git repo
 func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 	if ctx.Debug > 0 {
-		shared.Printf("parsing logs from %s\n", j.GitPath)
+		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Debugf("parsing logs from %s", j.GitPath)
 	}
 	// Example full command line:
 	// LANG=C PAGER='' git log --reverse --topo-order --branches --tags --remotes=origin --no-color --decorate --raw --numstat --pretty=fuller --decorate=full --parents -M -C -c
@@ -1621,12 +1623,12 @@ func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 	var pipe io.ReadCloser
 	pipe, cmd, err = shared.ExecCommandPipe(ctx, cmdLine, j.GitPath, GitDefaultEnv)
 	if err != nil {
-		shared.Printf("error executing %v: %v\n", cmdLine, err)
+		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Errorf("error executing %v: %v", cmdLine, err)
 		return
 	}
 	j.LineScanner = bufio.NewScanner(pipe)
 	if ctx.Debug > 0 {
-		shared.Printf("created logs scanner %s\n", j.GitPath)
+		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Debugf("created logs scanner %s", j.GitPath)
 	}
 	return
 }
@@ -1635,7 +1637,7 @@ func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 func (j *DSGit) GetAuthors(ctx *shared.Ctx, m map[string]string, n map[string][]string) (authors map[string]struct{}, author string) {
 	if ctx.Debug > 1 {
 		defer func() {
-			shared.Printf("GetAuthors(%+v,%+v) -> %+v,%s\n", m, n, authors, author)
+			j.log.WithFields(logrus.Fields{"operation": "GetAuthors"}).Debugf("GetAuthors(%+v,%+v) -> %+v,%s", m, n, authors, author)
 		}()
 	}
 	if len(m) > 0 {
@@ -1696,7 +1698,7 @@ func (j *DSGit) GetAuthorsData(ctx *shared.Ctx, doc interface{}, auth string) (a
 		authors, _ := iauthors.(string)
 		if j.PairProgramming {
 			if ctx.Debug > 1 {
-				shared.Printf("pp %s: %s\n", auth, authors)
+				j.log.WithFields(logrus.Fields{"operation": "GetAuthorsData"}).Debugf("pp %s: %s", auth, authors)
 			}
 			m1 := shared.MatchGroups(GitAuthorsPattern, authors)
 			m2 := shared.MatchGroupsArray(GitCoAuthorsPattern, authors)
@@ -1719,7 +1721,7 @@ func (j *DSGit) GetOtherPPAuthors(ctx *shared.Ctx, doc interface{}) (othersMap m
 		if ok {
 			others, _ := iothers.([]interface{})
 			if ctx.Debug > 1 {
-				shared.Printf("pp %s: %s\n", otherKey, others)
+				j.log.WithFields(logrus.Fields{"operation": "GetOtherPPAuthors"}).Debugf("pp %s: %s", otherKey, others)
 			}
 			if othersMap == nil {
 				othersMap = make(map[string]map[string]struct{})
@@ -1741,11 +1743,11 @@ func (j *DSGit) GetOtherPPAuthors(ctx *shared.Ctx, doc interface{}) (othersMap m
 // items is a current pack of input items
 // docs is a pointer to where extracted identities will be stored
 func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, docs *[]interface{}, final bool) (err error) {
-	shared.Printf("input processing(%d/%d/%v)\n", len(items), len(*docs), final)
+	j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Debugf("input processing(%d/%d/%v)", len(items), len(*docs), final)
 	outputDocs := func() {
 		if len(*docs) > 0 {
 			// actual output
-			shared.Printf("output processing(%d/%d/%v)\n", len(items), len(*docs), final)
+			j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Infof("output processing(%d/%d/%v)", len(items), len(*docs), final)
 			data := j.GetModelData(ctx, *docs)
 			if j.Publisher != nil {
 				formattedData := make([]interface{}, 0)
@@ -1754,17 +1756,17 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				}
 				err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
 				if err != nil {
-					shared.Printf("Error: %+v\n", err)
+					j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
 					return
 				}
 			} else {
 				var jsonBytes []byte
 				jsonBytes, err = jsoniter.Marshal(data)
 				if err != nil {
-					shared.Printf("Error: %+v\n", err)
+					j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
 					return
 				}
-				shared.Printf("%s\n", string(jsonBytes))
+				j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Infof("%s", string(jsonBytes))
 			}
 			*docs = []interface{}{}
 			gMaxUpstreamDtMtx.Lock()
@@ -1932,7 +1934,7 @@ func (j *DSGit) GetCommitBranch(ctx *shared.Ctx, refs []string) (branch string) 
 		branch = j.DefaultBranch
 	}
 	if ctx.Debug > 1 {
-		shared.Printf("Branch: %+v -> %s\n", refs, branch)
+		j.log.WithFields(logrus.Fields{"operation": "GetCommitBranch"}).Debugf("Branch: %+v -> %s", refs, branch)
 	}
 	return
 }
@@ -2000,7 +2002,7 @@ func (*DSGit) ExtractPrevFileName(f string) (res string) {
 func (j *DSGit) BuildCommit(ctx *shared.Ctx) (commit map[string]interface{}) {
 	if ctx.Debug > 2 {
 		defer func() {
-			shared.Printf("built commit %+v\n", commit)
+			j.log.WithFields(logrus.Fields{"operation": "BuildCommit"}).Debug("built commit %+v", commit)
 		}()
 	}
 	commit = j.Commit
@@ -2027,7 +2029,7 @@ func (j *DSGit) BuildCommit(ctx *shared.Ctx) (commit map[string]interface{}) {
 		d := j.CommitFiles[f]
 		ks = []string{}
 		if ctx.Debug > 1 {
-			shared.Printf("%s: '%s'->%+v\n", j.CurrentSHA, f, d)
+			j.log.WithFields(logrus.Fields{"operation": "BuildCommit"}).Debugf("%s: '%s'->%+v", j.CurrentSHA, f, d)
 		}
 		for k, v := range d {
 			if v == nil {
@@ -2035,7 +2037,7 @@ func (j *DSGit) BuildCommit(ctx *shared.Ctx) (commit map[string]interface{}) {
 			}
 		}
 		if ctx.Debug > 1 {
-			shared.Printf("%s: delete %+v\n", j.CurrentSHA, ks)
+			j.log.WithFields(logrus.Fields{"operation": "BuildCommit"}).Debugf("%s: delete %+v", j.CurrentSHA, ks)
 		}
 		for _, k := range ks {
 			delete(d, k)
@@ -2053,7 +2055,7 @@ func (j *DSGit) BuildCommit(ctx *shared.Ctx) (commit map[string]interface{}) {
 func (j *DSGit) ParseStats(ctx *shared.Ctx, data map[string]string) {
 	fileName := j.ExtractPrevFileName(data["file"])
 	if ctx.Debug > 1 {
-		shared.Printf("%s: '%s' --> '%s'\n", j.CurrentSHA, data["file"], fileName)
+		j.log.WithFields(logrus.Fields{"operation": "ParseStats"}).Debugf("%s: '%s' --> '%s'", j.CurrentSHA, data["file"], fileName)
 	}
 	prevData, ok := j.CommitFiles[fileName]
 	prevAdded, prevRemoved := 0, 0
@@ -2093,7 +2095,7 @@ func (j *DSGit) ParseFile(ctx *shared.Ctx, line string) (parsed, empty bool, err
 	if len(m) > 0 {
 		empty = true
 	} else if ctx.Debug > 1 {
-		shared.Printf("invalid file section format, line %d: '%s'\n", j.CurrLine, line)
+		j.log.WithFields(logrus.Fields{"operation": "ParseFile"}).Debugf("invalid file section format, line %d: '%s'", j.CurrLine, line)
 	}
 	j.ParseState = GitParseStateCommit
 	return
@@ -2132,7 +2134,7 @@ func (j *DSGit) ParseMessage(ctx *shared.Ctx, line string) (parsed bool, err err
 	m := shared.MatchGroups(GitMessagePattern, line)
 	if len(m) == 0 {
 		if ctx.Debug > 1 {
-			shared.Printf("invalid message format, line %d: '%s'", j.CurrLine, line)
+			j.log.WithFields(logrus.Fields{"operation": "ParseMessage"}).Debugf("invalid message format, line %d: '%s'", j.CurrLine, line)
 		}
 		j.ParseState = GitParseStateFile
 		return
@@ -2200,7 +2202,7 @@ func (j *DSGit) ParseTrailer(ctx *shared.Ctx, line string) {
 	trailers, ok := GitAllowedTrailers[lTrailer]
 	if !ok {
 		if ctx.Debug > 1 {
-			shared.Printf("Trailer %s/%s not in the allowed list %v, skipping\n", oTrailer, lTrailer, GitAllowedTrailers)
+			j.log.WithFields(logrus.Fields{"operation": "ParseTrailer"}).Debugf("Trailer %s/%s not in the allowed list %v, skipping", oTrailer, lTrailer, GitAllowedTrailers)
 		}
 		return
 	}
@@ -2208,7 +2210,7 @@ func (j *DSGit) ParseTrailer(ctx *shared.Ctx, line string) {
 		ary, ok := j.Commit[trailer]
 		if ok {
 			if ctx.Debug > 1 {
-				shared.Printf("trailer %s -> %s found in '%s'\n", oTrailer, trailer, line)
+				j.log.WithFields(logrus.Fields{"operation": "ParseTrailer"}).Debugf("trailer %s -> %s found in '%s'", oTrailer, trailer, line)
 			}
 			// Trailer can be the same as header value, we still want to have it - with "-Trailer" prefix added
 			_, ok = ary.(string)
@@ -2217,19 +2219,19 @@ func (j *DSGit) ParseTrailer(ctx *shared.Ctx, line string) {
 				ary2, ok2 := j.Commit[trailer]
 				if ok2 {
 					if ctx.Debug > 1 {
-						shared.Printf("renamed trailer %s -> %s found in '%s'\n", oTrailer, trailer, line)
+						j.log.WithFields(logrus.Fields{"operation": "ParseTrailer"}).Debugf("renamed trailer %s -> %s found in '%s'", oTrailer, trailer, line)
 					}
 					j.Commit[trailer] = append(ary2.([]interface{}), m["value"])
 				} else {
 					if ctx.Debug > 1 {
-						shared.Printf("added renamed trailer %s\n", trailer)
+						j.log.WithFields(logrus.Fields{"operation": "ParseTrailer"}).Debugf("added renamed trailer %s", trailer)
 					}
 					j.Commit[trailer] = []interface{}{m["value"]}
 				}
 			} else {
 				j.Commit[trailer] = shared.UniqueStringArray(append(ary.([]interface{}), m["value"]))
 				if ctx.Debug > 1 {
-					shared.Printf("appended trailer %s -> %s found in '%s'\n", oTrailer, trailer, line)
+					j.log.WithFields(logrus.Fields{"operation": "ParseTrailer"}).Debugf("appended trailer %s -> %s found in '%s'", oTrailer, trailer, line)
 				}
 			}
 		} else {
@@ -2263,7 +2265,7 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 			j.HandleRecentLines(line)
 		}
 		if ctx.Debug > 2 {
-			shared.Printf("line %d: '%s'\n", j.CurrLine, line)
+			j.log.WithFields(logrus.Fields{"operation": "ParseNextCommit"}).Debugf("line %d: '%s'", j.CurrLine, line)
 		}
 		var (
 			parsed bool
@@ -2290,10 +2292,10 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 			}
 			if ctx.Debug > 2 {
 				state += fmt.Sprintf(" -> (%v,%v,%v)", j.ParseState, parsed, err)
-				shared.Printf("%s\n", state)
+				j.log.WithFields(logrus.Fields{"operation": "ParseNextCommit"}).Debugf("%s", state)
 			}
 			if err != nil {
-				shared.Printf("parse next line '%s' error: %v\n", line, err)
+				j.log.WithFields(logrus.Fields{"operation": "ParseNextCommit"}).Errorf("parse next line '%s' error: %v", line, err)
 				return
 			}
 			if j.ParseState == GitParseStateCommit && j.Commit != nil {
@@ -2302,7 +2304,7 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 					commit["empty_commit"] = true
 					parsed, err = j.ParseCommit(ctx, line)
 					if !parsed || err != nil {
-						shared.Printf("failed to parse commit after empty file section\n")
+						j.log.WithFields(logrus.Fields{"operation": "ParseNextCommit"}).Error("failed to parse commit after empty file section")
 						return
 					}
 				}
@@ -2325,16 +2327,16 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	thrN := shared.GetThreadsNum(ctx)
 	if ctx.DateFrom != nil {
-		shared.Printf("%s fetching from %v (%d threads)\n", j.URL, ctx.DateFrom, thrN)
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 	}
 	if ctx.DateFrom == nil {
 		ctx.DateFrom = shared.GetLastUpdate(ctx, j.URL)
 		if ctx.DateFrom != nil {
-			shared.Printf("%s resuming from %v (%d threads)\n", j.URL, ctx.DateFrom, thrN)
+			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s resuming from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 		}
 	}
 	if ctx.DateTo != nil {
-		shared.Printf("%s fetching till %v (%d threads)\n", j.URL, ctx.DateTo, thrN)
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching till %v (%d threads)", j.URL, ctx.DateTo, thrN)
 	}
 	// NOTE: Non-generic starts here
 	var (
@@ -2365,7 +2367,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	j.GitPath, err = shared.EnsurePath(j.GitPath, true)
 	shared.FatalOnError(err)
 	if ctx.Debug > 0 {
-		shared.Printf("path to store git repository: %s\n", j.GitPath)
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("path to store git repository: %s", j.GitPath)
 	}
 	shared.FatalOnError(j.CreateGitRepo(ctx))
 	shared.FatalOnError(j.UpdateGitRepo(ctx))
@@ -2397,7 +2399,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		waitLOCMtx.Lock()
 		if !locFinished {
 			if ctx.Debug > 0 {
-				shared.Printf("waiting for git ops result\n")
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debug("waiting for git ops result")
 			}
 			e1 := <-goch
 			e2 := <-occh
@@ -2417,7 +2419,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			}
 			locFinished = true
 			if ctx.Debug > 0 {
-				shared.Printf("loc: %d, programming languages: %d\n", j.Loc, len(j.Pls))
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("loc: %d, programming languages: %d", j.Loc, len(j.Pls))
 			}
 		}
 		waitLOCMtx.Unlock()
@@ -2455,7 +2457,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 				// ee = SendToQueue(ctx, j, true, UUID, allCommits)
 				ee = j.GitEnrichItems(ctx, thrN, allCommits, &allDocs, false)
 				if ee != nil {
-					shared.Printf("error %v sending %d commits to queue\n", ee, len(allCommits))
+					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error %v sending %d commits to queue", ee, len(allCommits))
 				}
 				allCommits = []interface{}{}
 				if allCommitsMtx != nil {
@@ -2501,7 +2503,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 				)
 				esch, e = processCommit(ch, com)
 				if e != nil {
-					shared.Printf("process error: %v\n", e)
+					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
 					return
 				}
 				if esch != nil {
@@ -2567,24 +2569,24 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	}
 	nCommits := len(allCommits)
 	if ctx.Debug > 0 {
-		shared.Printf("%d remaining commits to send to queue\n", nCommits)
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("%d remaining commits to send to queue", nCommits)
 	}
 	// NOTE: for all items, even if 0 - to flush the queue
 	// err = SendToQueue(ctx, j, true, UUID, allCommits)
 	err = j.GitEnrichItems(ctx, thrN, allCommits, &allDocs, true)
 	if err != nil {
-		shared.Printf("Error %v sending %d commits to queue\n", err, len(allCommits))
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("Error %v sending %d commits to queue", err, len(allCommits))
 	}
 	if !locFinished {
 		go func() {
 			if ctx.Debug > 0 {
-				shared.Printf("gitops and orphaned commits result not needed, but waiting for orphan process\n")
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debug("gitops and orphaned commits result not needed, but waiting for orphan process")
 			}
 			<-goch
 			<-occh
 			locFinished = true
 			if ctx.Debug > 0 {
-				shared.Printf("loc: %d, programming languages: %d, orphaned commits: %d\n", j.Loc, len(j.Pls), len(j.OrphanedMap))
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debug("gitops and orphaned commits result not needed, but waiting for orphan process")
 			}
 		}()
 	}
@@ -2602,7 +2604,7 @@ func main() {
 	)
 	err := git.Init(&ctx)
 	if err != nil {
-		shared.Printf("Error: %+v\n", err)
+		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
 		return
 	}
 	timestamp := time.Now()
@@ -2612,9 +2614,22 @@ func main() {
 	git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	err = git.Sync(&ctx)
 	if err != nil {
-		shared.Printf("Error: %+v\n", err)
+		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
 		git.WriteLog(&ctx, timestamp, logger.Failed, err.Error())
 		return
 	}
 	git.WriteLog(&ctx, timestamp, logger.Done, "")
+}
+
+// createStructuredLogger...
+func (j *DSGit) createStructuredLogger(ctx *shared.Ctx) {
+	log := logrus.WithFields(
+		logrus.Fields{
+			"environment": os.Getenv("STAGE"),
+			"commit":      build.GitCommit,
+			"service":     build.AppName,
+			"endpoint":    j.URL,
+			"project":     ctx.Project,
+		})
+	j.log = log
 }
