@@ -2627,6 +2627,7 @@ func (j *DSGit) createStructuredLogger(ctx *shared.Ctx) {
 		logrus.Fields{
 			"environment": os.Getenv("STAGE"),
 			"commit":      build.GitCommit,
+			"version":     build.Version,
 			"service":     build.AppName,
 			"endpoint":    j.URL,
 			"project":     ctx.Project,
