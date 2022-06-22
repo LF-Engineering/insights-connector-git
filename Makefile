@@ -16,7 +16,7 @@ LDFLAGS=-ldflags "-s -w -extldflags '-static' -X github.com/LF-Engineering/insig
 -X github.com/LF-Engineering/insights-datasource-git/build.Version=$(VERSION) "
 all: check ${BINARIES}
 git: ${GO_BIN_FILES}
-	  ${GO_BUILD} -o git ${LDFLAGS} ${GO_BIN_FILES}
+	 ${GO_ENV} ${GO_BUILD} -o git ${LDFLAGS} ${GO_BIN_FILES}
 fmt: ${GO_BIN_FILES}
 	${GO_FMT} ${GO_BIN_FILES}
 lint: ${GO_BIN_FILES}
