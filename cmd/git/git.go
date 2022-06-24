@@ -2623,6 +2623,7 @@ func main() {
 
 // createStructuredLogger...
 func (j *DSGit) createStructuredLogger(ctx *shared.Ctx) {
+	logrus.SetFormatter(&logrus.JSONFormatter{})
 	log := logrus.WithFields(
 		logrus.Fields{
 			"environment": os.Getenv("STAGE"),
