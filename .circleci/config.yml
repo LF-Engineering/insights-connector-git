@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: minor-fix #main
+              only: main
             tags:
               ignore: /.*/
       - approve_prod:
