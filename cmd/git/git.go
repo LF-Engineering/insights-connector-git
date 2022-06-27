@@ -2604,7 +2604,7 @@ func main() {
 	)
 	err := git.Init(&ctx)
 	if err != nil {
-		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
+		shared.Printf("Error: %+v\n", err)
 		return
 	}
 	timestamp := time.Now()
