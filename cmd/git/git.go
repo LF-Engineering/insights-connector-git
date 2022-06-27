@@ -760,7 +760,6 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 		j.AddPublisher(&datalakeClient)
 	}
 	j.AddLogger(ctx)
-	j.createStructuredLogger(ctx)
 	return
 }
 
@@ -2602,6 +2601,7 @@ func main() {
 		ctx shared.Ctx
 		git DSGit
 	)
+	git.initStructuredLogger()
 	err := git.Init(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
@@ -2622,7 +2622,7 @@ func main() {
 }
 
 // createStructuredLogger...
-func (j *DSGit) createStructuredLogger(ctx *shared.Ctx) {
+func (j *DSGit) initStructuredLogger() {
 	logrus.SetFormatter(&logrus.JSONFormatter{})
 	log := logrus.WithFields(
 		logrus.Fields{
@@ -2631,7 +2631,6 @@ func (j *DSGit) createStructuredLogger(ctx *shared.Ctx) {
 			"version":     build.Version,
 			"service":     build.AppName,
 			"endpoint":    j.URL,
-			"project":     ctx.Project,
 		})
 	j.log = log
 }
