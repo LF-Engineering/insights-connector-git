@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	"io"
 	"math"
 	"net/url"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
 	"github.com/LF-Engineering/lfx-event-schema/service"
@@ -2060,9 +2060,6 @@ func (j *DSGit) ParseStats(ctx *shared.Ctx, data map[string]string) {
 	fileName := j.ExtractPrevFileName(data["file"])
 	if ctx.Debug > 1 {
 		j.log.WithFields(logrus.Fields{"operation": "ParseStats"}).Debugf("%s: '%s' --> '%s'", j.CurrentSHA, data["file"], fileName)
-	}
-	if data["file"] == "4b1499ec935516ccbdcc4e7657561ff3e4a98f02" {
-		fmt.Println("xxxx")
 	}
 	prevData, ok := j.CommitFiles[fileName]
 	prevAdded, prevRemoved := 0, 0
