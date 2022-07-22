@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	"io"
 	"math"
 	"net/url"
@@ -579,6 +580,8 @@ type DSGit struct {
 	// RepositorySource for example git, github or gerrit
 	RepositorySource string
 	log              *logrus.Entry
+	cacheProvider    cache.Manager
+	endpoint         string
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -1769,7 +1772,10 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			*docs = []interface{}{}
 			gMaxUpstreamDtMtx.Lock()
 			defer gMaxUpstreamDtMtx.Unlock()
-			shared.SetLastUpdate(ctx, j.URL, gMaxUpstreamDt)
+			err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
+			if err != nil {
+				return
+			}
 		}
 	}
 	if final {
@@ -2055,6 +2061,9 @@ func (j *DSGit) ParseStats(ctx *shared.Ctx, data map[string]string) {
 	if ctx.Debug > 1 {
 		j.log.WithFields(logrus.Fields{"operation": "ParseStats"}).Debugf("%s: '%s' --> '%s'", j.CurrentSHA, data["file"], fileName)
 	}
+	if data["file"] == "4b1499ec935516ccbdcc4e7657561ff3e4a98f02" {
+		fmt.Println("xxxx")
+	}
 	prevData, ok := j.CommitFiles[fileName]
 	prevAdded, prevRemoved := 0, 0
 	if !ok {
@@ -2328,7 +2337,12 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 	}
 	if ctx.DateFrom == nil {
-		ctx.DateFrom = shared.GetLastUpdate(ctx, j.URL)
+		cachedLastSync, er := j.cacheProvider.GetLastSync(j.endpoint)
+		if er != nil {
+			err = er
+			return
+		}
+		ctx.DateFrom = &cachedLastSync
 		if ctx.DateFrom != nil {
 			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s resuming from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 		}
@@ -2591,7 +2605,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	// NOTE: Non-generic ends here
 	gMaxUpstreamDtMtx.Lock()
 	defer gMaxUpstreamDtMtx.Unlock()
-	shared.SetLastUpdate(ctx, j.URL, gMaxUpstreamDt)
+	err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
 	return
 }
 
@@ -2600,7 +2614,7 @@ func main() {
 		ctx shared.Ctx
 		git DSGit
 	)
-	git.initStructuredLogger()
+	git.initStructuredLogger(&ctx)
 	err := git.Init(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
@@ -2610,6 +2624,7 @@ func main() {
 	shared.SetSyncMode(true, false)
 	shared.SetLogLoggerError(false)
 	shared.AddLogger(&git.Logger, GitDataSource, logger.Internal, []map[string]string{{"REPO_URL": git.URL, "ProjectSlug": ctx.Project}})
+	git.AddCacheProvider()
 	git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	err = git.Sync(&ctx)
 	if err != nil {
@@ -2621,7 +2636,14 @@ func main() {
 }
 
 // createStructuredLogger...
-func (j *DSGit) initStructuredLogger() {
+func (j *DSGit) initStructuredLogger(ctx *shared.Ctx) {
+	endpointURL := ""
+	if shared.FlagPassed(ctx, "url") && *j.FlagURL != "" {
+		endpointURL = *j.FlagURL
+	}
+	if ctx.EnvSet("URL") {
+		endpointURL = ctx.Env("URL")
+	}
 	logrus.SetFormatter(&logrus.JSONFormatter{})
 	log := logrus.WithFields(
 		logrus.Fields{
@@ -2629,7 +2651,14 @@ func (j *DSGit) initStructuredLogger() {
 			"commit":      build.GitCommit,
 			"version":     build.Version,
 			"service":     build.AppName,
-			"endpoint":    j.URL,
+			"endpoint":    endpointURL,
 		})
 	j.log = log
+}
+
+// AddCacheProvider - adds cache provider
+func (j *DSGit) AddCacheProvider() {
+	cacheProvider := cache.NewManager(GitDataSource, os.Getenv("STAGE"))
+	j.cacheProvider = *cacheProvider
+	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "http://"), "/", "-")
 }
