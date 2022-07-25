@@ -2632,12 +2632,16 @@ func main() {
 		ctx shared.Ctx
 		git DSGit
 	)
-	git.initStructuredLogger(&ctx)
+	git.initStructuredLogger()
 	err := git.Init(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
 		return
 	}
+	git.log = git.log.WithFields(
+		logrus.Fields{
+			"endpoint": git.URL,
+		})
 	timestamp := time.Now()
 	shared.SetSyncMode(true, false)
 	shared.SetLogLoggerError(false)
@@ -2654,14 +2658,7 @@ func main() {
 }
 
 // createStructuredLogger...
-func (j *DSGit) initStructuredLogger(ctx *shared.Ctx) {
-	endpointURL := ""
-	if shared.FlagPassed(ctx, "url") && *j.FlagURL != "" {
-		endpointURL = *j.FlagURL
-	}
-	if ctx.EnvSet("URL") {
-		endpointURL = ctx.Env("URL")
-	}
+func (j *DSGit) initStructuredLogger() {
 	logrus.SetFormatter(&logrus.JSONFormatter{})
 	log := logrus.WithFields(
 		logrus.Fields{
@@ -2669,7 +2666,7 @@ func (j *DSGit) initStructuredLogger(ctx *shared.Ctx) {
 			"commit":      build.GitCommit,
 			"version":     build.Version,
 			"service":     build.AppName,
-			"endpoint":    endpointURL,
+			"endpoint":    j.URL,
 		})
 	j.log = log
 }
