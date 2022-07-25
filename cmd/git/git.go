@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -1752,13 +1753,33 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			data := j.GetModelData(ctx, *docs)
 			if j.Publisher != nil {
 				formattedData := make([]interface{}, 0)
+				vals := make([]map[string]interface{}, 0)
 				for _, d := range data {
-					formattedData = append(formattedData, d)
+					isCreated, err := j.cacheProvider.IsKeyCreated(j.endpoint, d.Payload.SHA)
+					if err != nil {
+						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error creating cache for commit %s, error %v", d.Payload.SHA, err)
+						continue
+					}
+					if !isCreated {
+						formattedData = append(formattedData, d)
+						b, err := json.Marshal(d)
+						if err != nil {
+							j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error marshall data for commit %s, error %v", d.Payload.SHA, err)
+							continue
+						}
+						vals = append(vals, map[string]interface{}{
+							"id":   d.Payload.ID,
+							"data": b,
+						})
+					}
 				}
-				err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
-				if err != nil {
-					j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
-					return
+				err = j.cacheProvider.Create(j.endpoint, vals)
+				if len(formattedData) > 0 {
+					err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+					if err != nil {
+						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
+						return
+					}
 				}
 			} else {
 				var jsonBytes []byte
@@ -2657,5 +2678,5 @@ func (j *DSGit) initStructuredLogger(ctx *shared.Ctx) {
 func (j *DSGit) AddCacheProvider() {
 	cacheProvider := cache.NewManager(GitDataSource, os.Getenv("STAGE"))
 	j.cacheProvider = *cacheProvider
-	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "http://"), "/", "-")
+	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "git://"), "http://"), "/", "-")
 }
