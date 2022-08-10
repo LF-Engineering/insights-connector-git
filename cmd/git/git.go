@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -618,9 +619,15 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 }
 
 // WriteLog - writes to log
-func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message string) {
-	_ = j.Logger.Write(&logger.Log{
+func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message string) error {
+	arn, err := aws.GetContainerARN()
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "WriteLog"}).Errorf("getContainerMetadata Error : %+v", err)
+		return err
+	}
+	err = j.Logger.Write(&logger.Log{
 		Connector: GitDataSource,
+		TaskARN:   arn,
 		Configuration: []map[string]string{
 			{
 				"REPO_URL":    j.URL,
@@ -630,6 +637,7 @@ func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message s
 		CreatedAt: timestamp,
 		Message:   message,
 	})
+	return err
 }
 
 // AddFlags - add git specific flags
@@ -2647,14 +2655,21 @@ func main() {
 	shared.SetLogLoggerError(false)
 	shared.AddLogger(&git.Logger, GitDataSource, logger.Internal, []map[string]string{{"REPO_URL": git.URL, "ProjectSlug": ctx.Project}})
 	git.AddCacheProvider()
-	git.WriteLog(&ctx, timestamp, logger.InProgress, "")
+	err = git.WriteLog(&ctx, timestamp, logger.InProgress, "")
+	if err != nil {
+		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
+		return
+	}
 	err = git.Sync(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
-		git.WriteLog(&ctx, timestamp, logger.Failed, err.Error())
+		er := git.WriteLog(&ctx, timestamp, logger.Failed, err.Error())
+		if er != nil {
+			err = er
+		}
 		return
 	}
-	git.WriteLog(&ctx, timestamp, logger.Done, "")
+	err = git.WriteLog(&ctx, timestamp, logger.Done, "")
 }
 
 // createStructuredLogger...
