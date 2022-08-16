@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: main
+              only: fix-dependency-issue #main
             tags:
               ignore: /.*/
       - approve_prod:
