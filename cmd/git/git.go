@@ -2658,18 +2658,25 @@ func main() {
 	err = git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
-		return
 	}
+	shared.FatalOnError(err)
+
 	err = git.Sync(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
 		er := git.WriteLog(&ctx, timestamp, logger.Failed, err.Error())
 		if er != nil {
-			err = er
+			git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
+			shared.FatalOnError(er)
 		}
-		return
 	}
+	shared.FatalOnError(err)
+
 	err = git.WriteLog(&ctx, timestamp, logger.Done, "")
+	if err != nil {
+		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
+	}
+	shared.FatalOnError(err)
 }
 
 // createStructuredLogger...
