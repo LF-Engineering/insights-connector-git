@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
@@ -1763,7 +1763,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				formattedData := make([]interface{}, 0)
 				vals := make([]map[string]interface{}, 0)
 				for _, d := range data {
-					isCreated, err := j.cacheProvider.IsKeyCreated(j.endpoint, d.Payload.SHA)
+					isCreated, err := j.cacheProvider.IsKeyCreated(j.endpoint, d.Payload.ID)
 					if err != nil {
 						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error creating cache for commit %s, error %v", d.Payload.SHA, err)
 						continue
@@ -2658,18 +2658,25 @@ func main() {
 	err = git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
-		return
 	}
+	shared.FatalOnError(err)
+
 	err = git.Sync(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
 		er := git.WriteLog(&ctx, timestamp, logger.Failed, err.Error())
 		if er != nil {
-			err = er
+			git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
+			shared.FatalOnError(er)
 		}
-		return
 	}
+	shared.FatalOnError(err)
+
 	err = git.WriteLog(&ctx, timestamp, logger.Done, "")
+	if err != nil {
+		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
+	}
+	shared.FatalOnError(err)
 }
 
 // createStructuredLogger...
