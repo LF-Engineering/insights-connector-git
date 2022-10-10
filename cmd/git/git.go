@@ -515,7 +515,7 @@ var (
 
 // Publisher - for streaming data to Kinesis
 type Publisher interface {
-	PushEvents(action, source, eventType, subEventType, env string, data []interface{}) error
+	PushEvents(action, source, eventType, subEventType, env string, data []interface{}) (string, error)
 }
 
 // RawPLS - programming language summary (all fields as strings)
@@ -1778,18 +1778,27 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 							continue
 						}
 						vals = append(vals, map[string]interface{}{
-							"id":   d.Payload.ID,
-							"data": b,
+							"id": d.Payload.ID,
+							"data": map[string]interface{}{
+								"content": b,
+							},
 						})
 					}
 				}
-				err = j.cacheProvider.Create(j.endpoint, vals)
+				path := ""
 				if len(formattedData) > 0 {
-					err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+					path, err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
 					if err != nil {
 						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
 						return
 					}
+				}
+				if len(vals) > 0 {
+					for i, o := range vals {
+						o["data"].(map[string]interface{})["path"] = path
+						vals[i] = o
+					}
+					err = j.cacheProvider.Create(j.endpoint, vals)
 				}
 			} else {
 				var jsonBytes []byte
