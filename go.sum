@@ -1,6 +1,6 @@
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/LF-Engineering/insights-datasource-shared v1.5.13-0.20220823221255-792e9bbc15c7 h1:/hH1GY0sZ537pch+ttGuaAfTtXHmeKwQKj1FyN2TxEM=
-github.com/LF-Engineering/insights-datasource-shared v1.5.13-0.20220823221255-792e9bbc15c7/go.mod h1:ZQCRAJNyizhBemQDSjqm14G2MPkOJbRzCPfjwFhYKy4=
+github.com/LF-Engineering/insights-datasource-shared v1.5.17-0.20221019211451-0350d862fedc h1:d7XtXKI0qJmmxhpxlq37Dd2oWmZM6c+/L5rLa3qOsJs=
+github.com/LF-Engineering/insights-datasource-shared v1.5.17-0.20221019211451-0350d862fedc/go.mod h1:ZQCRAJNyizhBemQDSjqm14G2MPkOJbRzCPfjwFhYKy4=
 github.com/LF-Engineering/lfx-event-schema v0.1.14/go.mod h1:CfFIZ4mwzo88umf5+KxDQEzqlVkPG7Vx8eLK2oDfWIs=
 github.com/LF-Engineering/lfx-event-schema v0.1.33 h1:5Yk20tPkPbyOKEckcEF87qEQtl1H8l6TyA9wjKi+cl0=
 github.com/LF-Engineering/lfx-event-schema v0.1.33/go.mod h1:CfFIZ4mwzo88umf5+KxDQEzqlVkPG7Vx8eLK2oDfWIs=
