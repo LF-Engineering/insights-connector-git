@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
