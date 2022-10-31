@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: main
+              only: sync-with-isbotidentity-changes #main
             tags:
               ignore: /.*/
       - approve_prod:

@@ -1280,7 +1280,11 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 				if err != nil {
 					j.log.WithFields(logrus.Fields{"operation": "GetModelData"}).Error(fmt.Errorf("GenerateIdentity source: %s, email: %s, name:%s, username:%s. error: %+v", j.RepositorySource, email, name, username, err))
 				}
-				isBotIdentity := shared.IsBotIdentity(name, email)
+				fmt.Println(os.Getenv("BOT_NAME_REGEX"))
+				fmt.Println(os.Getenv("BOT_USERNAME_REGEX"))
+				fmt.Println(os.Getenv("BOT_EMAIL_REGEX"))
+
+				isBotIdentity := shared.IsBotIdentity(name, username, email, GitConnector, os.Getenv("BOT_NAME_REGEX"), os.Getenv("BOT_USERNAME_REGEX"), os.Getenv("BOT_EMAIL_REGEX"))
 				commitRole.Identity = user.UserIdentityObjectBase{
 					ID:         userID,
 					Email:      email,
