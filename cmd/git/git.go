@@ -2652,7 +2652,9 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	// NOTE: Non-generic ends here
 	gMaxUpstreamDtMtx.Lock()
 	defer gMaxUpstreamDtMtx.Unlock()
-	err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
+	if !gMaxUpstreamDt.IsZero() {
+		err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
+	}
 	return
 }
 
