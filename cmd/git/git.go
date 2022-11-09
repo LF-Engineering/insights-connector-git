@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"math"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1619,7 +1617,7 @@ func (j *DSGit) GetGitBranches(ctx *shared.Ctx) (err error) {
 }
 
 // ParseGitLog - update git repo
-func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
+func (j *DSGit) ParseGitLog(ctx *shared.Ctx, perPage int, skip int) (*bufio.Scanner, error) {
 	if ctx.Debug > 0 {
 		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Debugf("parsing logs from %s", j.GitPath)
 	}
@@ -1633,17 +1631,22 @@ func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 	if ctx.DateTo != nil {
 		cmdLine = append(cmdLine, "--until="+shared.ToYMDHMSDate(*ctx.DateTo))
 	}
-	var pipe io.ReadCloser
-	pipe, cmd, err = shared.ExecCommandPipe(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	cmdLine = append(cmdLine, fmt.Sprintf("--max-count=%v", perPage))
+	cmdLine = append(cmdLine, fmt.Sprintf("--skip=%v", skip))
+	pipe, cmd, err := shared.ExecCommandPipe(ctx, cmdLine, j.GitPath, GitDefaultEnv)
 	if err != nil {
 		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Errorf("error executing %v: %v", cmdLine, err)
-		return
+		return nil, err
 	}
-	j.LineScanner = bufio.NewScanner(pipe)
+	err = cmd.Wait()
+	if err != nil {
+		return nil, err
+	}
+	lineScanner := bufio.NewScanner(pipe)
 	if ctx.Debug > 0 {
 		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Debugf("created logs scanner %s", j.GitPath)
 	}
-	return
+	return lineScanner, nil
 }
 
 // GetAuthors - parse multiple authors used in pair programming mode
@@ -2302,10 +2305,11 @@ func (j *DSGit) HandleRecentLines(line string) {
 }
 
 // ParseNextCommit - parse next git log commit or report end
-func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{}, ok bool, err error) {
-	for j.LineScanner.Scan() {
+func (j *DSGit) ParseNextCommit(ctx *shared.Ctx, lineScanner *bufio.Scanner) (commit map[string]interface{}, ok bool, counter int, err error) {
+	for lineScanner.Scan() {
+		counter++
 		j.CurrLine++
-		line := strings.TrimRight(j.LineScanner.Text(), "\n")
+		line := strings.TrimRight(lineScanner.Text(), "\n")
 		if ctx.Debug > 2 {
 			j.HandleRecentLines(line)
 		}
@@ -2369,7 +2373,7 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 }
 
 // Sync - sync git data source
-func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
+func (j *DSGit) Sync(ctx *shared.Ctx) error {
 	thrN := shared.GetThreadsNum(ctx)
 	lastSync := os.Getenv("LAST_SYNC")
 	if lastSync != "" {
@@ -2386,8 +2390,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if ctx.DateFrom == nil {
 		cachedLastSync, er := j.cacheProvider.GetLastSync(j.endpoint)
 		if er != nil {
-			err = er
-			return
+			return er
 		}
 		ctx.DateFrom = &cachedLastSync
 		if ctx.DateFrom != nil {
@@ -2416,15 +2419,16 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		waitLOCMtx = &sync.Mutex{}
 		goch, _ = j.GetGitOps(ctx, thrN)
 	} else {
-		_, err = j.GetGitOps(ctx, thrN)
+		_, err := j.GetGitOps(ctx, thrN)
 		if err != nil {
-			return
+			return err
 		}
 	}
 	// Do normal git processing, which don't needs gitops yet
 	j.GitPath = j.ReposPath + "/" + j.URL + "-git"
-	j.GitPath, err = shared.EnsurePath(j.GitPath, true)
+	gitPath, err := shared.EnsurePath(j.GitPath, true)
 	shared.FatalOnError(err)
+	j.GitPath = gitPath
 	if ctx.Debug > 0 {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("path to store git repository: %s", j.GitPath)
 	}
@@ -2435,18 +2439,14 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	} else {
 		_, err = j.GetOrphanedCommits(ctx, thrN)
 		if err != nil {
-			return
+			return err
 		}
 	}
 	err = j.GetGitBranches(ctx)
 	if err != nil {
-		return
+		return err
 	}
-	var cmd *exec.Cmd
-	cmd, err = j.ParseGitLog(ctx)
-	if err != nil {
-		return
-	}
+
 	// Continue with operations that need git ops
 	nThreads := 0
 	locFinished := false
@@ -2542,90 +2542,104 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		}
 		return
 	}
-	var (
-		commit map[string]interface{}
-		ok     bool
-	)
-	if thrN > 1 {
-		for {
-			commit, ok, err = j.ParseNextCommit(ctx)
-			if err != nil {
-				return
-			}
-			if !ok {
-				break
-			}
-			go func(com map[string]interface{}) {
-				var (
-					e    error
-					esch chan error
-				)
-				esch, e = processCommit(ch, com)
-				if e != nil {
-					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
-					return
-				}
-				if esch != nil {
-					if eschaMtx != nil {
-						eschaMtx.Lock()
-					}
-					escha = append(escha, esch)
-					if eschaMtx != nil {
-						eschaMtx.Unlock()
-					}
-				}
-			}(commit)
-			nThreads++
-			if nThreads == thrN {
-				err = <-ch
-				if err != nil {
-					return
-				}
-				nThreads--
-			}
-		}
-		for nThreads > 0 {
-			err = <-ch
-			nThreads--
-			if err != nil {
-				return
-			}
-		}
-	} else {
-		for {
-			commit, ok, err = j.ParseNextCommit(ctx)
-			if err != nil {
-				return
-			}
-			if !ok {
-				break
-			}
-			_, err = processCommit(nil, commit)
-			if err != nil {
-				return
-			}
-		}
-	}
-	// NOTE: lock needed
-	if eschaMtx != nil {
-		eschaMtx.Lock()
-	}
-	for _, esch := range escha {
-		err = <-esch
+
+	//Page commits data
+	page := 0
+	perPage := 1000
+	skip := page * perPage
+	for {
+		counter := 0
+		buf, err := j.ParseGitLog(ctx, perPage, skip)
 		if err != nil {
-			if eschaMtx != nil {
-				eschaMtx.Unlock()
-			}
-			return
+			return err
 		}
+		page++
+		var (
+			commit map[string]interface{}
+			ok     bool
+		)
+		if thrN > 1 {
+			for {
+				commit, ok, counter, err = j.ParseNextCommit(ctx, buf)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					break
+				}
+				go func(com map[string]interface{}) {
+					var (
+						e    error
+						esch chan error
+					)
+					esch, e = processCommit(ch, com)
+					if e != nil {
+						j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
+						return
+					}
+					if esch != nil {
+						if eschaMtx != nil {
+							eschaMtx.Lock()
+						}
+						escha = append(escha, esch)
+						if eschaMtx != nil {
+							eschaMtx.Unlock()
+						}
+					}
+				}(commit)
+				nThreads++
+				if nThreads == thrN {
+					err = <-ch
+					if err != nil {
+						return err
+					}
+					nThreads--
+				}
+			}
+			for nThreads > 0 {
+				err = <-ch
+				nThreads--
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			for {
+				commit, ok, counter, err = j.ParseNextCommit(ctx, buf)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					break
+				}
+				_, err = processCommit(nil, commit)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		// NOTE: lock needed
+		if eschaMtx != nil {
+			eschaMtx.Lock()
+		}
+		for _, esch := range escha {
+			err = <-esch
+			if err != nil {
+				if eschaMtx != nil {
+					eschaMtx.Unlock()
+				}
+				return err
+			}
+		}
+		if eschaMtx != nil {
+			eschaMtx.Unlock()
+		}
+		if counter < perPage {
+			break
+		}
+
 	}
-	if eschaMtx != nil {
-		eschaMtx.Unlock()
-	}
-	err = cmd.Wait()
-	if err != nil {
-		return
-	}
+
 	nCommits := len(allCommits)
 	if ctx.Debug > 0 {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("%d remaining commits to send to queue", nCommits)
@@ -2636,6 +2650,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("Error %v sending %d commits to queue", err, len(allCommits))
 	}
+
 	if !locFinished {
 		go func() {
 			if ctx.Debug > 0 {
@@ -2652,8 +2667,10 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	// NOTE: Non-generic ends here
 	gMaxUpstreamDtMtx.Lock()
 	defer gMaxUpstreamDtMtx.Unlock()
-	err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
-	return
+	if !gMaxUpstreamDt.IsZero() {
+		err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
+	}
+	return err
 }
 
 func main() {
