@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 const (
@@ -2678,6 +2680,26 @@ func main() {
 	shared.SetLogLoggerError(false)
 	shared.AddLogger(&git.Logger, GitDataSource, logger.Internal, []map[string]string{{"REPO_URL": git.URL, "ProjectSlug": ctx.Project}})
 	git.AddCacheProvider()
+	if os.Getenv("SPAN") != "" {
+		tracer.Start(tracer.WithGlobalTag("connector", "git"))
+		defer tracer.Stop()
+
+		sb := os.Getenv("SPAN")
+		carrier := make(tracer.TextMapCarrier)
+		err = jsoniter.Unmarshal([]byte(sb), &carrier)
+		if err != nil {
+			return
+		}
+		sctx, er := tracer.Extract(carrier)
+		if er != nil {
+			fmt.Println(er)
+		}
+		if err == nil && sctx != nil {
+			span, _ := tracer.StartSpanFromContext(context.Background(), "commit", tracer.ResourceName("connector"), tracer.ChildOf(sctx))
+			defer span.Finish()
+		}
+	}
+
 	err = git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
