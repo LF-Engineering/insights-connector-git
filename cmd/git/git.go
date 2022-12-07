@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
@@ -2761,7 +2761,7 @@ func (j *DSGit) initStructuredLogger() {
 
 // AddCacheProvider - adds cache provider
 func (j *DSGit) AddCacheProvider() {
-	cacheProvider := cache.NewManager(GitDataSource, os.Getenv("STAGE"))
+	cacheProvider := cache.NewManager(fmt.Sprintf("v2/%s", GitDataSource), os.Getenv("STAGE"))
 	j.cacheProvider = *cacheProvider
 	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "git://"), "http://"), "/", "-")
 }
