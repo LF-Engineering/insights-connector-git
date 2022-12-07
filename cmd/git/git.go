@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -626,9 +627,7 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 
 // WriteLog - writes to log
 func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message string) error {
-	//arn, err := aws.GetContainerARN()
-	arn := "arn:aws:ecs:us-east-2:395594542180:task/insights-ecs-cluster/282dc8e0b4254132938c453dc897e4a2"
-	var err error
+	arn, err := aws.GetContainerARN()
 	if err != nil {
 		j.log.WithFields(logrus.Fields{"operation": "WriteLog"}).Errorf("getContainerMetadata Error : %+v", err)
 		return err
