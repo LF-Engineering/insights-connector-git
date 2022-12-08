@@ -2407,14 +2407,20 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		return
 	}
 	for _, record := range records {
+		orphaned, err := strconv.ParseBool(record[5])
+		if err != nil {
+			orphaned = false
+		}
+		if lastSync != "" {
+			orphaned = true
+		}
 		cachedCommits[record[1]] = CommitCache{
 			Timestamp:      record[0],
 			EntityID:       record[1],
 			SourceEntityID: record[2],
 			FileLocation:   record[3],
 			Hash:           record[4],
-			//todo: handle orphaned
-			//Orphaned:       record[5],
+			Orphaned:       orphaned,
 		}
 	}
 	if ctx.DateTo != nil {
@@ -2806,8 +2812,10 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 }
 
 func isKeyCreated(id string) bool {
-	_, ok := cachedCommits[id]
+	c, ok := cachedCommits[id]
 	if ok {
+		c.Orphaned = false
+		cachedCommits[id] = c
 		return true
 	}
 	return false
