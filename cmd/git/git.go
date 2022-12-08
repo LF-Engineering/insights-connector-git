@@ -1771,7 +1771,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			data := j.GetModelData(ctx, *docs)
 			if j.Publisher != nil {
 				formattedData := make([]interface{}, 0)
-				comms := make([]CommitCache, 0)
+				commits := make([]CommitCache, 0)
 				for _, d := range data {
 					isCreated := isKeyCreated(d.Payload.ID)
 					if !isCreated {
@@ -1783,7 +1783,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						}
 						tFloat := shared.ConvertTimeToFloat(d.Payload.SyncTimestamp)
 						contentHash := fmt.Sprintf("%x", sha256.Sum256(b))
-						comms = append(comms, CommitCache{
+						commits = append(commits, CommitCache{
 							Timestamp:      fmt.Sprintf("%f", tFloat),
 							EntityID:       d.Payload.ID,
 							SourceEntityID: d.Payload.SHA,
@@ -1799,8 +1799,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						return
 					}
 				}
-				err = j.createCacheFile(comms, path)
-				if err != nil {
+				if err = j.createCacheFile(commits, path); err != nil {
 					return
 				}
 
@@ -2821,6 +2820,7 @@ func isKeyCreated(id string) bool {
 	return false
 }
 
+// CommitCache single commit cache schema
 type CommitCache struct {
 	Timestamp      string `json:"timestamp"`
 	EntityID       string `json:"entity_id"`
