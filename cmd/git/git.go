@@ -1781,10 +1781,10 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 							j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error marshall data for commit %s, error %v", d.Payload.SHA, err)
 							continue
 						}
-						tFloat := shared.ConvertTimeToFloat(d.Payload.SyncTimestamp)
+						tStamp := d.Payload.SyncTimestamp.Unix()
 						contentHash := fmt.Sprintf("%x", sha256.Sum256(b))
 						commits = append(commits, CommitCache{
-							Timestamp:      fmt.Sprintf("%f", tFloat),
+							Timestamp:      fmt.Sprintf("%v", tStamp),
 							EntityID:       d.Payload.ID,
 							SourceEntityID: d.Payload.SHA,
 							Hash:           contentHash,
@@ -2793,7 +2793,10 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 	if err != nil {
 		return err
 	}
-	csvFile.Close()
+	err = csvFile.Close()
+	if err != nil {
+		return err
+	}
 	file, err := os.ReadFile(commitsCacheFile)
 	if err != nil {
 		return err
