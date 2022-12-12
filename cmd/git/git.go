@@ -2405,7 +2405,10 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		return
 	}
-	for _, record := range records {
+	for i, record := range records {
+		if i == 0 {
+			continue
+		}
 		orphaned, err := strconv.ParseBool(record[5])
 		if err != nil {
 			orphaned = false
