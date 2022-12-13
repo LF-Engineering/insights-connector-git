@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -23,9 +24,11 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/auth0"
 	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
+	http1 "github.com/LF-Engineering/insights-datasource-shared/http"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
 	"github.com/LF-Engineering/lfx-event-schema/service"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
@@ -96,6 +99,10 @@ const (
 	Success = "success"
 	// GitConnector ...
 	GitConnector = "git-connector"
+	// DataLakeProd ...
+	DataLakeProd = "https://api-gw.platform.linuxfoundation.org/lfx-dbaas/v1/query"
+	// DataLakeDev ...
+	DataLakeDev = "https://api-gw.dev.platform.linuxfoundation.org/lfx-dbaas/v1/query"
 )
 
 var (
@@ -1799,7 +1806,11 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						return
 					}
 				}
-				if err = j.createCacheFile(commits, path); err != nil {
+				for _, comm := range commits {
+					comm.FileLocation = path
+					cachedCommits[comm.EntityID] = comm
+				}
+				if err = j.createCacheFile(); err != nil {
 					return
 				}
 
@@ -2428,6 +2439,18 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if ctx.DateTo != nil {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching till %v (%d threads)", j.URL, ctx.DateTo, thrN)
 	}
+	dlCommits, err := j.queryDataLakeCommits()
+	if err != nil {
+		return err
+	}
+	curr := len(cachedCommits)
+	updateCacheFromDataLake(dlCommits)
+	if curr != len(cachedCommits) {
+		err = j.createCacheFile()
+		if err != nil {
+			return err
+		}
+	}
 	// NOTE: Non-generic starts here
 	var (
 		ch            chan error
@@ -2723,7 +2746,7 @@ func main() {
 		if er != nil {
 			fmt.Println(er)
 		}
-		if err == nil && sctx != nil {
+		if er == nil && sctx != nil {
 			span, _ := tracer.StartSpanFromContext(context.Background(), "commit", tracer.ResourceName("connector"), tracer.ChildOf(sctx))
 			defer span.Finish()
 		}
@@ -2774,11 +2797,106 @@ func (j *DSGit) AddCacheProvider() {
 	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "git://"), "http://"), "/", "-")
 }
 
-func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
-	for _, comm := range cache {
-		comm.FileLocation = path
-		cachedCommits[comm.EntityID] = comm
+func (j *DSGit) queryDataLakeCommits() ([]DataLakeCommit, error) {
+	authToken, err := j.getAuthToken()
+	if err != nil {
+		return []DataLakeCommit{}, err
 	}
+	httpClient := http1.NewClientProvider(time.Second*50, true)
+
+	headers := make(map[string]string)
+	headers["Accept"] = "application/json"
+	headers["Authorization"] = authToken
+
+	var lfxQuery = struct {
+		SqlStatement string `json:"stmt"`
+	}{
+		SqlStatement: fmt.Sprintf("select * from commit where repository_url = '%s'", j.URL),
+	}
+
+	body, err := jsoniter.Marshal(lfxQuery)
+	if err != nil {
+		return []DataLakeCommit{}, err
+	}
+
+	dataLakeURL := DataLakeDev
+	if os.Getenv("STAGE") == "prod" {
+		dataLakeURL = DataLakeProd
+	}
+
+	statusCode, response, err := httpClient.Request(dataLakeURL, http.MethodPost, headers, body, nil)
+	if err != nil {
+		return []DataLakeCommit{}, err
+	}
+
+	if statusCode != http.StatusOK {
+		var errMsg LFXDataLakeServiceError
+		if string(response) != "" {
+			err := jsoniter.Unmarshal(response, &errMsg)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if errMsg.Message != "" {
+			return nil, fmt.Errorf(errMsg.Message)
+		}
+		return nil, fmt.Errorf("lfxdatalake.PostSQLQuery error %v", statusCode)
+	}
+	var commits CommitDataLakeResponse
+	err = jsoniter.Unmarshal(response, &commits)
+	if err != nil {
+		return commits.Data, err
+	}
+	return commits.Data, nil
+}
+
+func updateCacheFromDataLake(dataLakeCommits []DataLakeCommit) {
+	for _, c := range dataLakeCommits {
+		_, ok := cachedCommits[c.CommitId]
+		if !ok {
+			cachedCommits[c.CommitId] = CommitCache{
+				Timestamp:      fmt.Sprintf("%v", c.SyncTimestamp),
+				EntityID:       c.CommitId,
+				SourceEntityID: c.Sha,
+			}
+		}
+	}
+
+}
+
+func (j *DSGit) getAuthToken() (string, error) {
+	httpClientProvider := http1.NewClientProvider(time.Second*50, true)
+	esCacheClientProvider, err := elastic.NewClientProvider(&elastic.Params{
+		URL: os.Getenv("ES_CACHE_URL"),
+	})
+	if err != nil {
+		return "", err
+	}
+	env := os.Getenv("STAGE")
+	if env == "dev" {
+		env = "test"
+	}
+	auth0Client, err := auth0.NewAuth0Client(
+		env,
+		os.Getenv("AUTH_GRANT_TYPE"),
+		os.Getenv("AUTH_CLIENT_ID"),
+		os.Getenv("AUTH_CLIENT_SECRET"),
+		os.Getenv("AUTH_AUDIENCE"),
+		os.Getenv("AUTH0_URL"),
+		httpClientProvider,
+		esCacheClientProvider,
+		nil,
+		"syncReporter")
+
+	token, err := auth0Client.GetToken()
+	if err != nil {
+		return token, err
+	}
+	return fmt.Sprintf("Bearer %s", token), nil
+}
+
+func (j *DSGit) createCacheFile() error {
 	records := [][]string{
 		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned"},
 	}
@@ -2834,4 +2952,41 @@ type CommitCache struct {
 	FileLocation   string `json:"file_location"`
 	Hash           string `json:"hash"`
 	Orphaned       bool   `json:"orphaned"`
+}
+
+// LFXDataLakeServiceError ...
+type LFXDataLakeServiceError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type CommitDataLakeResponse struct {
+	Data []DataLakeCommit `json:"data"`
+}
+
+type DataLakeCommit struct {
+	AuthoredTimestamp  int64    `json:"authored_timestamp"`
+	Branch             string   `json:"branch"`
+	CommitId           string   `json:"commit_id"`
+	CommittedTimestamp int64    `json:"committed_timestamp"`
+	Connector          string   `json:"connector"`
+	ConnectorVersion   string   `json:"connector_version"`
+	CreatedAt          int      `json:"created_at"`
+	CreatedBy          string   `json:"created_by"`
+	CreatedYear        string   `json:"created_year"`
+	DefaultBranch      bool     `json:"default_branch"`
+	DocCommit          bool     `json:"doc_commit"`
+	MergeCommit        bool     `json:"merge_commit"`
+	Message            string   `json:"message"`
+	Orphaned           bool     `json:"orphaned"`
+	ParentShas         []string `json:"parent_shas"`
+	RepositoryId       string   `json:"repository_id"`
+	RepositoryUrl      string   `json:"repository_url"`
+	Sha                string   `json:"sha"`
+	ShortHash          string   `json:"short_hash"`
+	Source             string   `json:"source"`
+	SyncTimestamp      int64    `json:"sync_timestamp"`
+	UpdatedAt          int      `json:"updated_at"`
+	UpdatedBy          string   `json:"updated_by"`
+	Url                string   `json:"url"`
 }
