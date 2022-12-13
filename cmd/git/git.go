@@ -99,10 +99,6 @@ const (
 	Success = "success"
 	// GitConnector ...
 	GitConnector = "git-connector"
-	// DataLakeProd ...
-	DataLakeProd = "https://api-gw.platform.linuxfoundation.org/lfx-dbaas/v1/query"
-	// DataLakeDev ...
-	DataLakeDev = "https://api-gw.dev.platform.linuxfoundation.org/lfx-dbaas/v1/query"
 )
 
 var (
@@ -2821,11 +2817,7 @@ func (j *DSGit) queryDataLakeCommits() ([]DataLakeCommit, error) {
 		return []DataLakeCommit{}, err
 	}
 
-	dataLakeURL := DataLakeDev
-	if os.Getenv("STAGE") == "prod" {
-		dataLakeURL = DataLakeProd
-	}
-
+	dataLakeURL := os.Getenv("DATA_LAKE_SERVICE_URL")
 	statusCode, response, err := httpClient.Request(dataLakeURL, http.MethodPost, headers, body, nil)
 	if err != nil {
 		return []DataLakeCommit{}, err
