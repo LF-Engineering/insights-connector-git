@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: sync-cache-with-datalake #main
+              only: main
             tags:
               ignore: /.*/
       - approve_prod:
