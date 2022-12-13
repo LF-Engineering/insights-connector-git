@@ -2439,16 +2439,18 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if ctx.DateTo != nil {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching till %v (%d threads)", j.URL, ctx.DateTo, thrN)
 	}
-	dlCommits, err := j.queryDataLakeCommits()
-	if err != nil {
-		return err
-	}
-	curr := len(cachedCommits)
-	updateCacheFromDataLake(dlCommits)
-	if curr != len(cachedCommits) {
-		err = j.createCacheFile()
+	if lastSync != "" {
+		dlCommits, err := j.queryDataLakeCommits()
 		if err != nil {
 			return err
+		}
+		curr := len(cachedCommits)
+		updateCacheFromDataLake(dlCommits)
+		if curr != len(cachedCommits) {
+			err = j.createCacheFile()
+			if err != nil {
+				return err
+			}
 		}
 	}
 	// NOTE: Non-generic starts here
