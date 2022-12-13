@@ -2960,10 +2960,12 @@ type LFXDataLakeServiceError struct {
 	Message string `json:"message"`
 }
 
+// CommitDataLakeResponse ...
 type CommitDataLakeResponse struct {
 	Data []DataLakeCommit `json:"data"`
 }
 
+// DataLakeCommit ...
 type DataLakeCommit struct {
 	AuthoredTimestamp  int64    `json:"authored_timestamp"`
 	Branch             string   `json:"branch"`
