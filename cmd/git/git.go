@@ -943,10 +943,15 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
+	authorLocalTime, err := shared.TimeParseAny(strings.TrimSpace(sAuthorDate))
+	if !ok {
+		err = fmt.Errorf("cannot parse commit local date from %v", sAuthorDate)
+		return
+	}
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
-	rich["author_local_date"] = authorDate
+	rich["author_local_date"] = authorLocalTime
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -956,12 +961,17 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	sCommitDate, _ := iCommitDate.(string)
 	commitDate, commitDateTz, commitTz, ok := shared.ParseDateWithTz(sCommitDate)
 	if !ok {
-		err = fmt.Errorf("cannot parse commit date from %v", sCommitDate)
+		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
+		return
+	}
+	commitLocalTime, err := shared.TimeParseAny(strings.TrimSpace(sCommitDate))
+	if !ok {
+		err = fmt.Errorf("cannot parse commit local date from %v", sCommitDate)
 		return
 	}
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
-	rich["commit_local_date"] = commitDate
+	rich["commit_local_date"] = commitLocalTime
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
