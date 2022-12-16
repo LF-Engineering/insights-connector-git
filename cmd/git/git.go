@@ -964,7 +964,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
 		return
 	}
-	commitLocalTime, err := time.Parse("2006-01-02T15:04:05-0700", strings.TrimSpace(sCommitDate))
+	commitLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sCommitDate))
 	if !ok {
 		err = fmt.Errorf("cannot parse commit local date from %v", sCommitDate)
 		return
