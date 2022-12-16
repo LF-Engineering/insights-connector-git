@@ -2840,7 +2840,48 @@ func isKeyCreated(id string) bool {
 	return false
 }
 
-func convertToLocalDate(dateStr string) (time.Time, error) {
+func convertToLocalDate(sdt string) (time.Time, error) {
+	// https://www.broobles.com/eml2mbox/mbox.html
+	// but the real world is not that simple
+	for _, r := range []string{">", ",", ")", "("} {
+		sdt = strings.Replace(sdt, r, "", -1)
+	}
+	for _, split := range []string{"+0", "+1", "."} {
+		ary := strings.Split(sdt, split)
+		sdt = ary[0]
+	}
+	for _, split := range []string{"-0", "-1"} {
+		ary := strings.Split(sdt, split)
+		lAry := len(ary)
+		if lAry > 1 {
+			_, err := strconv.Atoi(ary[lAry-1])
+			if err == nil {
+				sdt = strings.Join(ary[:lAry-1], split)
+			}
+		}
+	}
+	sdt = SpacesRE.ReplaceAllString(sdt, " ")
+	sdt = strings.ToLower(strings.TrimSpace(sdt))
+	ary := strings.Split(sdt, " ")
+	day := ary[0]
+	if len(day) > 3 {
+		day = day[:3]
+	}
+	_, ok := LowerDayNames[day]
+	if ok {
+		sdt = strings.Join(ary[1:], " ")
+	}
+	sdt = strings.TrimSpace(sdt)
+	for lm, m := range LowerFullMonthNames {
+		sdt = strings.Replace(sdt, lm, m, -1)
+	}
+	for lm, m := range LowerMonthNames {
+		sdt = strings.Replace(sdt, lm, m, -1)
+	}
+	ary = strings.Split(sdt, " ")
+	if len(ary) > 4 {
+		sdt = strings.Join(ary[:4], " ")
+	}
 	formats := []string{
 		"2006-01-02 15:04:05",
 		"2006-01-02t15:04:05",
@@ -2865,7 +2906,7 @@ func convertToLocalDate(dateStr string) (time.Time, error) {
 	}
 	var err error
 	for _, format := range formats {
-		dt, er := time.Parse(format, dateStr)
+		dt, er := time.Parse(format, sdt)
 		if er == nil {
 			return dt, nil
 		}
@@ -2883,3 +2924,44 @@ type CommitCache struct {
 	Hash           string `json:"hash"`
 	Orphaned       bool   `json:"orphaned"`
 }
+
+var (
+	SpacesRE            = regexp.MustCompile(`\s+`)
+	LowerFullMonthNames = map[string]string{
+		"january":   "Jan",
+		"february":  "Feb",
+		"march":     "Mar",
+		"april":     "Apr",
+		"may":       "May",
+		"june":      "Jun",
+		"july":      "Jul",
+		"august":    "Aug",
+		"september": "Sep",
+		"october":   "Oct",
+		"november":  "Nov",
+		"december":  "Dec",
+	}
+	LowerMonthNames = map[string]string{
+		"jan": "Jan",
+		"feb": "Feb",
+		"mar": "Mar",
+		"apr": "Apr",
+		"may": "May",
+		"jun": "Jun",
+		"jul": "Jul",
+		"aug": "Aug",
+		"sep": "Sep",
+		"oct": "Oct",
+		"nov": "Nov",
+		"dec": "Dec",
+	}
+	LowerDayNames = map[string]struct{}{
+		"mon": {},
+		"tue": {},
+		"wed": {},
+		"thu": {},
+		"fri": {},
+		"sat": {},
+		"sun": {},
+	}
+)
