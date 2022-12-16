@@ -23,6 +23,7 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
@@ -626,9 +627,7 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 
 // WriteLog - writes to log
 func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message string) error {
-	//arn, err := aws.GetContainerARN()
-	arn := "arn:aws:ecs:us-east-2:395594542180:task/insights-ecs-cluster/0070b1fbb09b47a6aeea5c9395864bfe"
-	var err error
+	arn, err := aws.GetContainerARN()
 	if err != nil {
 		j.log.WithFields(logrus.Fields{"operation": "WriteLog"}).Errorf("getContainerMetadata Error : %+v", err)
 		return err
@@ -947,7 +946,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
-	rich["author_local_date"] = sAuthorDate
+	rich["author_local_date"] = authorDate
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -962,7 +961,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	}
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
-	rich["commit_local_date"] = sCommitDate
+	rich["commit_local_date"] = commitDate
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
