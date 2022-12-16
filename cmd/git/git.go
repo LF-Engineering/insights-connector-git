@@ -943,7 +943,12 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
-	authorLocalTime, err := convertToLocalDate(strings.TrimSpace(sAuthorDate))
+	fmt.Println(authorTz)
+	fmt.Println(sAuthorDate)
+	fmt.Println(authorDate)
+	fmt.Println(authorDateTz)
+
+	authorLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sAuthorDate))
 	if !ok {
 		err = fmt.Errorf("cannot parse commit local date from %v", sAuthorDate)
 		return
@@ -964,7 +969,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
 		return
 	}
-	commitLocalTime, err := convertToLocalDate(strings.TrimSpace(sCommitDate))
+	commitLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sCommitDate))
 	if !ok {
 		err = fmt.Errorf("cannot parse commit local date from %v", sCommitDate)
 		return
@@ -2840,7 +2845,7 @@ func isKeyCreated(id string) bool {
 	return false
 }
 
-func convertToLocalDate(sdt string) (time.Time, error) {
+/*func convertToLocalDate2(sdt string) (time.Time, error) {
 	// https://www.broobles.com/eml2mbox/mbox.html
 	// but the real world is not that simple
 	for _, r := range []string{">", ",", ")", "("} {
@@ -2914,7 +2919,7 @@ func convertToLocalDate(sdt string) (time.Time, error) {
 	}
 	return time.Time{}, err
 }
-
+*/
 // CommitCache single commit cache schema
 type CommitCache struct {
 	Timestamp      string `json:"timestamp"`
