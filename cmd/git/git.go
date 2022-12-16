@@ -1255,7 +1255,8 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		}
 		commit.ID = commitID
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
-		commit.CommittedLocalTimestamp, _ = doc["commit_local_date"].(time.Time)
+		authorLocalTime, _ := doc["commit_local_date"]
+		commit.CommittedLocalTimestamp, _ = time.Parse(time.RFC3339, authorLocalTime.(string))
 		createdOn := authoredDt
 		commit.SyncTimestamp = time.Now()
 		commitRoles := []insights.Contributor{}
