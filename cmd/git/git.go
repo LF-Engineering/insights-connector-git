@@ -23,7 +23,6 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
@@ -627,7 +626,9 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 
 // WriteLog - writes to log
 func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message string) error {
-	arn, err := aws.GetContainerARN()
+	//arn, err := aws.GetContainerARN()
+	arn := "arn:aws:ecs:us-east-2:395594542180:task/insights-ecs-cluster/0070b1fbb09b47a6aeea5c9395864bfe"
+	var err error
 	if err != nil {
 		j.log.WithFields(logrus.Fields{"operation": "WriteLog"}).Errorf("getContainerMetadata Error : %+v", err)
 		return err
@@ -946,6 +947,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
+	rich["author_local_date"] = sAuthorDate
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -955,11 +957,12 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	sCommitDate, _ := iCommitDate.(string)
 	commitDate, commitDateTz, commitTz, ok := shared.ParseDateWithTz(sCommitDate)
 	if !ok {
-		err = fmt.Errorf("cannot parse commit date from %v", iAuthorDate)
+		err = fmt.Errorf("cannot parse commit date from %v", sCommitDate)
 		return
 	}
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
+	rich["commit_local_date"] = sCommitDate
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
@@ -1240,6 +1243,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
+		commit.AuthoredLocalTimestamp, _ = doc["author_local_date"].(time.Time)
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.RepositoryID = repoID
@@ -1249,6 +1253,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		}
 		commit.ID = commitID
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
+		commit.CommittedLocalTimestamp, _ = doc["commit_local_date"].(time.Time)
 		createdOn := authoredDt
 		commit.SyncTimestamp = time.Now()
 		commitRoles := []insights.Contributor{}
