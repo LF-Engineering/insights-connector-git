@@ -943,12 +943,10 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
-	t := authorDateTz.Add(time.Duration(authorTz) * time.Hour).Format("2006-01-02T15:04:05-07:00")
+	//t := authorDateTz.Add(time.Duration(authorTz) * time.Hour).Format("2006-01-02T15:04:05-07:00")
 
 	fmt.Println(authorTz)
-	fmt.Println("xxxx")
-	fmt.Println(t)
-	fmt.Println("xxxx")
+	fmt.Printf("%v, %v", authorDate, authorDateTz)
 
 	authorLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sAuthorDate))
 	if !ok {
@@ -2847,7 +2845,7 @@ func isKeyCreated(id string) bool {
 	return false
 }
 
-/*func convertToLocalDate2(sdt string) (time.Time, error) {
+func convertToLocalDate2(sdt string) (time.Time, error) {
 	// https://www.broobles.com/eml2mbox/mbox.html
 	// but the real world is not that simple
 	for _, r := range []string{">", ",", ")", "("} {
@@ -2921,7 +2919,7 @@ func isKeyCreated(id string) bool {
 	}
 	return time.Time{}, err
 }
-*/
+
 // CommitCache single commit cache schema
 type CommitCache struct {
 	Timestamp      string `json:"timestamp"`
