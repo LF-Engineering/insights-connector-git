@@ -943,7 +943,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
-	authorLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sAuthorDate))
+	authorLocalTime, err := convertToLocalDate(strings.TrimSpace(sAuthorDate))
 	if !ok {
 		err = fmt.Errorf("cannot parse commit local date from %v", sAuthorDate)
 		return
@@ -964,7 +964,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
 		return
 	}
-	commitLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sCommitDate))
+	commitLocalTime, err := convertToLocalDate(strings.TrimSpace(sCommitDate))
 	if !ok {
 		err = fmt.Errorf("cannot parse commit local date from %v", sCommitDate)
 		return
@@ -2838,6 +2838,40 @@ func isKeyCreated(id string) bool {
 		return true
 	}
 	return false
+}
+
+func convertToLocalDate(dateStr string) (time.Time, error) {
+	formats := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02t15:04:05",
+		"2006-01-02 15:04:05z",
+		"2006-01-02t15:04:05z",
+		"2 Jan 2006 15:04:05",
+		"02 Jan 2006 15:04:05",
+		"2 Jan 06 15:04:05",
+		"02 Jan 06 15:04:05",
+		"2 Jan 2006 15:04",
+		"02 Jan 2006 15:04",
+		"2 Jan 06 15:04",
+		"02 Jan 06 15:04",
+		"Jan 2 15:04:05 2006",
+		"Jan 02 15:04:05 2006",
+		"Jan 2 15:04:05 06",
+		"Jan 02 15:04:05 06",
+		"Jan 2 15:04 2006",
+		"Jan 02 15:04 2006",
+		"Jan 2 15:04 06",
+		"Jan 02 15:04 06",
+	}
+	var err error
+	for _, format := range formats {
+		dt, er := time.Parse(format, dateStr)
+		if er == nil {
+			return dt, nil
+		}
+		err = er
+	}
+	return time.Time{}, err
 }
 
 // CommitCache single commit cache schema
