@@ -947,7 +947,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
-	rich["author_local_date"] = authorDateTz
+	rich["author_local_date"] = authorDateTz.Format(time.RFC3339)
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -963,7 +963,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
-	rich["commit_local_date"] = commitDateTz
+	rich["commit_local_date"] = commitDateTz.Format(time.RFC3339)
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
@@ -1244,7 +1244,8 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
-		commit.AuthoredLocalTimestamp, _ = doc["author_local_date"].(time.Time)
+		localTime, _ := doc["author_local_date"]
+		commit.AuthoredLocalTimestamp, _ = time.Parse(time.RFC3339, localTime.(string))
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.RepositoryID = repoID
