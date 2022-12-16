@@ -943,7 +943,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
-	t := authorDateTz.Add(time.Duration(authorTz) * time.Hour).Format(time.RFC3339)
+	t := authorDateTz.Add(time.Duration(authorTz) * time.Hour).Format("2006-01-02T15:04:05-07:00")
 
 	fmt.Println(authorTz)
 	fmt.Println("xxxx")
