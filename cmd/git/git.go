@@ -943,20 +943,11 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
-	//t := authorDateTz.Add(time.Duration(authorTz) * time.Hour).Format("2006-01-02T15:04:05-07:00")
 
-	fmt.Println(authorTz)
-	fmt.Printf("%v, %v", authorDate, authorDateTz)
-
-	authorLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sAuthorDate))
-	if !ok {
-		err = fmt.Errorf("cannot parse commit local date from %v", sAuthorDate)
-		return
-	}
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
-	rich["author_local_date"] = authorLocalTime
+	rich["author_local_date"] = authorDateTz
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -969,14 +960,10 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
 		return
 	}
-	commitLocalTime, err := time.Parse(time.RFC3339, strings.TrimSpace(sCommitDate))
-	if !ok {
-		err = fmt.Errorf("cannot parse commit local date from %v", sCommitDate)
-		return
-	}
+
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
-	rich["commit_local_date"] = commitLocalTime
+	rich["commit_local_date"] = commitDateTz
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
@@ -2845,81 +2832,6 @@ func isKeyCreated(id string) bool {
 	return false
 }
 
-func convertToLocalDate2(sdt string) (time.Time, error) {
-	// https://www.broobles.com/eml2mbox/mbox.html
-	// but the real world is not that simple
-	for _, r := range []string{">", ",", ")", "("} {
-		sdt = strings.Replace(sdt, r, "", -1)
-	}
-	for _, split := range []string{"+0", "+1", "."} {
-		ary := strings.Split(sdt, split)
-		sdt = ary[0]
-	}
-	for _, split := range []string{"-0", "-1"} {
-		ary := strings.Split(sdt, split)
-		lAry := len(ary)
-		if lAry > 1 {
-			_, err := strconv.Atoi(ary[lAry-1])
-			if err == nil {
-				sdt = strings.Join(ary[:lAry-1], split)
-			}
-		}
-	}
-	sdt = SpacesRE.ReplaceAllString(sdt, " ")
-	sdt = strings.ToLower(strings.TrimSpace(sdt))
-	ary := strings.Split(sdt, " ")
-	day := ary[0]
-	if len(day) > 3 {
-		day = day[:3]
-	}
-	_, ok := LowerDayNames[day]
-	if ok {
-		sdt = strings.Join(ary[1:], " ")
-	}
-	sdt = strings.TrimSpace(sdt)
-	for lm, m := range LowerFullMonthNames {
-		sdt = strings.Replace(sdt, lm, m, -1)
-	}
-	for lm, m := range LowerMonthNames {
-		sdt = strings.Replace(sdt, lm, m, -1)
-	}
-	ary = strings.Split(sdt, " ")
-	if len(ary) > 4 {
-		sdt = strings.Join(ary[:4], " ")
-	}
-	formats := []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02t15:04:05",
-		"2006-01-02 15:04:05z",
-		"2006-01-02t15:04:05z",
-		"2 Jan 2006 15:04:05",
-		"02 Jan 2006 15:04:05",
-		"2 Jan 06 15:04:05",
-		"02 Jan 06 15:04:05",
-		"2 Jan 2006 15:04",
-		"02 Jan 2006 15:04",
-		"2 Jan 06 15:04",
-		"02 Jan 06 15:04",
-		"Jan 2 15:04:05 2006",
-		"Jan 02 15:04:05 2006",
-		"Jan 2 15:04:05 06",
-		"Jan 02 15:04:05 06",
-		"Jan 2 15:04 2006",
-		"Jan 02 15:04 2006",
-		"Jan 2 15:04 06",
-		"Jan 02 15:04 06",
-	}
-	var err error
-	for _, format := range formats {
-		dt, er := time.Parse(format, sdt)
-		if er == nil {
-			return dt, nil
-		}
-		err = er
-	}
-	return time.Time{}, err
-}
-
 // CommitCache single commit cache schema
 type CommitCache struct {
 	Timestamp      string `json:"timestamp"`
@@ -2929,44 +2841,3 @@ type CommitCache struct {
 	Hash           string `json:"hash"`
 	Orphaned       bool   `json:"orphaned"`
 }
-
-var (
-	SpacesRE            = regexp.MustCompile(`\s+`)
-	LowerFullMonthNames = map[string]string{
-		"january":   "Jan",
-		"february":  "Feb",
-		"march":     "Mar",
-		"april":     "Apr",
-		"may":       "May",
-		"june":      "Jun",
-		"july":      "Jul",
-		"august":    "Aug",
-		"september": "Sep",
-		"october":   "Oct",
-		"november":  "Nov",
-		"december":  "Dec",
-	}
-	LowerMonthNames = map[string]string{
-		"jan": "Jan",
-		"feb": "Feb",
-		"mar": "Mar",
-		"apr": "Apr",
-		"may": "May",
-		"jun": "Jun",
-		"jul": "Jul",
-		"aug": "Aug",
-		"sep": "Sep",
-		"oct": "Oct",
-		"nov": "Nov",
-		"dec": "Dec",
-	}
-	LowerDayNames = map[string]struct{}{
-		"mon": {},
-		"tue": {},
-		"wed": {},
-		"thu": {},
-		"fri": {},
-		"sat": {},
-		"sun": {},
-	}
-)
