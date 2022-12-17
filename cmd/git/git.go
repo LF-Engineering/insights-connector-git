@@ -1244,8 +1244,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
-		localTime, _ := doc["author_local_date"]
-		commit.AuthoredLocalTimestamp, _ = time.Parse(time.RFC3339, localTime.(string))
+		commit.AuthoredLocalTimestamp, _ = doc["author_local_date"].(string)
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.RepositoryID = repoID
@@ -1255,8 +1254,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		}
 		commit.ID = commitID
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
-		authorLocalTime, _ := doc["commit_local_date"]
-		commit.CommittedLocalTimestamp, _ = time.Parse(time.RFC3339, authorLocalTime.(string))
+		commit.CommittedLocalTimestamp, _ = doc["commit_local_date"].(string)
 		createdOn := authoredDt
 		commit.SyncTimestamp = time.Now()
 		commitRoles := []insights.Contributor{}
