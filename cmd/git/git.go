@@ -944,10 +944,13 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		return
 	}
 
+	authorLocation := time.FixedZone(fmt.Sprintf("UTC%v", authorTz), int(authorTz)*60*60)
+	authorLocalDate := time.Date(authorDate.Year(), authorDate.Month(), authorDate.Day(), authorDate.Hour(), authorDate.Minute(), authorDate.Second(), authorDate.Nanosecond(), authorLocation)
+
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
-	rich["author_local_date"] = authorDateTz.Format(time.RFC3339)
+	rich["author_local_date"] = authorLocalDate.Format(time.RFC3339)
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -960,11 +963,11 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
 		return
 	}
-	lo := time.FixedZone(fmt.Sprintf("UTC%v", commitTz), int(commitTz)*60*60)
-	t := time.Date(commitDate.Year(), commitDate.Month(), commitDate.Day(), commitDate.Hour(), commitDate.Minute(), commitDate.Second(), commitDate.Nanosecond(), lo)
+	committerLocation := time.FixedZone(fmt.Sprintf("UTC%v", commitTz), int(commitTz)*60*60)
+	committerLocationDate := time.Date(commitDate.Year(), commitDate.Month(), commitDate.Day(), commitDate.Hour(), commitDate.Minute(), commitDate.Second(), commitDate.Nanosecond(), committerLocation)
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
-	rich["commit_local_date"] = t.Format(time.RFC3339)
+	rich["commit_local_date"] = committerLocationDate.Format(time.RFC3339)
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
