@@ -960,10 +960,15 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
 		return
 	}
-
+	lo := time.FixedZone(fmt.Sprintf("UTC%v", commitTz), int(commitTz)*60*60)
+	local, err := time.ParseInLocation(time.RFC3339, commitDateTz.String(), lo)
+	if err != nil {
+		err = fmt.Errorf("cannot parse commit date from %v", iCommitDate)
+		return
+	}
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
-	rich["commit_local_date"] = commitDateTz.Format(time.RFC3339)
+	rich["commit_local_date"] = local
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
