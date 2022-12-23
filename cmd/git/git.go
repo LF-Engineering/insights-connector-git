@@ -27,6 +27,7 @@ import (
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
+	"github.com/LF-Engineering/insights-datasource-shared/report"
 	"github.com/LF-Engineering/lfx-event-schema/service"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights/git"
@@ -591,6 +592,7 @@ type DSGit struct {
 	log              *logrus.Entry
 	cacheProvider    cache.Manager
 	endpoint         string
+	reportProvider   *report.Manager
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -1819,6 +1821,23 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			if err != nil {
 				return
 			}
+
+			// write report data
+			rData := new(ReportData)
+			rData.NewCommits = int64(len(data))
+			rData.URL = j.URL
+			rData.Date = time.Now().UnixNano()
+
+			b, err := jsoniter.Marshal(rData)
+			if err != nil {
+				return
+			}
+
+			err = j.reportProvider.UpdateFileByKey(fmt.Sprintf("%+v-%+v.json", j.endpoint, time.Now().Unix()), b)
+			if err != nil {
+				return
+			}
+
 		}
 	}
 	if final {
@@ -2709,6 +2728,7 @@ func main() {
 	shared.SetLogLoggerError(false)
 	shared.AddLogger(&git.Logger, GitDataSource, logger.Internal, []map[string]string{{"REPO_URL": git.URL, "ProjectSlug": ctx.Project}})
 	git.AddCacheProvider()
+	git.AddReportProvider()
 	if os.Getenv("SPAN") != "" {
 		tracer.Start(tracer.WithGlobalTag("connector", "git"))
 		defer tracer.Stop()
@@ -2774,6 +2794,13 @@ func (j *DSGit) AddCacheProvider() {
 	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "git://"), "http://"), "/", "-")
 }
 
+// AddReportProvider - adds report provider
+func (j *DSGit) AddReportProvider() {
+	reportProvider := report.NewManager(os.Getenv("STAGE"))
+	j.reportProvider = reportProvider
+	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "git://"), "http://"), "/", "-")
+}
+
 func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 	for _, comm := range cache {
 		comm.FileLocation = path
@@ -2834,4 +2861,16 @@ type CommitCache struct {
 	FileLocation   string `json:"file_location"`
 	Hash           string `json:"hash"`
 	Orphaned       bool   `json:"orphaned"`
+}
+
+// ReportData schema
+type ReportData struct {
+	ID              string `json:"id"`
+	SfdcID          string `json:"sfdc_id"`
+	ProjectName     string `json:"project_name"`
+	URL             string `json:"url"`
+	NewCommits      int64  `json:"new_commits"`
+	Date            int64  `json:"date"`
+	SyncStatus      string `json:"sync_status"`
+	OrphanedCommits int64  `json:"orphaned_commits"`
 }
