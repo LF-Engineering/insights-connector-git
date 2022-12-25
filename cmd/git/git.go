@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	b64 "encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
@@ -2433,6 +2434,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			Hash:           record[4],
 			Orphaned:       orphaned,
 			FromDL:         fromDL,
+			Content:        record[7],
 		}
 	}
 	if ctx.DateTo != nil {
@@ -2794,10 +2796,10 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 		cachedCommits[comm.EntityID] = comm
 	}
 	records := [][]string{
-		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl"},
+		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl", "content"},
 	}
 	for _, c := range cachedCommits {
-		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned), strconv.FormatBool(c.FromDL)})
+		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned), strconv.FormatBool(c.FromDL), c.Content})
 	}
 
 	csvFile, err := os.Create(commitsCacheFile)
@@ -2858,14 +2860,23 @@ func (j *DSGit) handleDataLakeOrphans() {
 		Source:           insights.Source(j.RepositorySource),
 	}
 
-	for orphanedID, v := range cachedCommits {
+	for _, v := range cachedCommits {
 		if v.Orphaned && v.FromDL {
-			commit := git.CommitUpdatedEvent{
+			commitB, err := b64.StdEncoding.DecodeString(v.Content)
+			if err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error decode datalake orphand commit: %+v", err)
+			}
+			var commit git.Commit
+			err = jsoniter.Unmarshal(commitB, commit)
+			if err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error unmarshall datalake orphand commit: %+v", err)
+			}
+			commitEvent := git.CommitUpdatedEvent{
 				CommitBaseEvent: commitBaseEvent,
 				BaseEvent:       baseEvent,
-				Payload:         git.Commit{ID: orphanedID, Orphaned: true},
+				Payload:         commit,
 			}
-			formattedData = append(formattedData, commit)
+			formattedData = append(formattedData, commitEvent)
 		}
 	}
 
@@ -2880,6 +2891,7 @@ func (j *DSGit) handleDataLakeOrphans() {
 			commit := cachedCommits[id]
 			commit.FromDL = false
 			commit.FileLocation = path
+			commit.Content = ""
 			cachedCommits[id] = commit
 		}
 		if err = j.createCacheFile([]CommitCache{}, ""); err != nil {
@@ -2900,4 +2912,5 @@ type CommitCache struct {
 	Hash           string `json:"hash"`
 	Orphaned       bool   `json:"orphaned"`
 	FromDL         bool   `json:"from_dl"`
+	Content        string `json:"content"`
 }
