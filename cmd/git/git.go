@@ -2416,6 +2416,15 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		if lastSync != "" {
 			orphaned = true
 		}
+
+		var fromDL bool
+		if len(record) > 6 {
+			fromDL, err = strconv.ParseBool(record[6])
+			if err != nil {
+				fromDL = false
+			}
+		}
+
 		cachedCommits[record[1]] = CommitCache{
 			Timestamp:      record[0],
 			EntityID:       record[1],
@@ -2423,6 +2432,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			FileLocation:   record[3],
 			Hash:           record[4],
 			Orphaned:       orphaned,
+			FromDL:         fromDL,
 		}
 	}
 	if ctx.DateTo != nil {
@@ -2680,6 +2690,10 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			}
 		}()
 	}
+
+	if lastSync != "" {
+		j.handleDataLakeOrphans()
+	}
 	// NOTE: Non-generic ends here
 	gMaxUpstreamDtMtx.Lock()
 	defer gMaxUpstreamDtMtx.Unlock()
@@ -2780,10 +2794,10 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 		cachedCommits[comm.EntityID] = comm
 	}
 	records := [][]string{
-		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned"},
+		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl"},
 	}
 	for _, c := range cachedCommits {
-		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned)})
+		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned), strconv.FormatBool(c.FromDL)})
 	}
 
 	csvFile, err := os.Create(commitsCacheFile)
@@ -2826,6 +2840,57 @@ func isKeyCreated(id string) bool {
 	return false
 }
 
+// handleDataLakeOrphans Update commits in DL with new orphaned status
+func (j *DSGit) handleDataLakeOrphans() {
+	formattedData := make([]interface{}, 0)
+	baseEvent := service.BaseEvent{
+		Type: CommitUpdated,
+		CRUDInfo: service.CRUDInfo{
+			CreatedBy: GitConnector,
+			UpdatedBy: GitConnector,
+			CreatedAt: time.Now().Unix(),
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	commitBaseEvent := git.CommitBaseEvent{
+		Connector:        insights.GitConnector,
+		ConnectorVersion: GitBackendVersion,
+		Source:           insights.Source(j.RepositorySource),
+	}
+
+	for orphanedID, v := range cachedCommits {
+		if v.Orphaned && v.FromDL {
+			commit := git.CommitUpdatedEvent{
+				CommitBaseEvent: commitBaseEvent,
+				BaseEvent:       baseEvent,
+				Payload:         git.Commit{ID: orphanedID, Orphaned: true},
+			}
+			formattedData = append(formattedData, commit)
+		}
+	}
+
+	if len(formattedData) > 0 {
+		path, err := j.Publisher.PushEvents(CommitUpdated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error pushing data lake orphand commits: %+v", err)
+			return
+		}
+		for _, c := range formattedData {
+			id := c.(git.CommitUpdatedEvent).Payload.ID
+			commit := cachedCommits[id]
+			commit.FromDL = false
+			commit.FileLocation = path
+			cachedCommits[id] = commit
+		}
+		if err = j.createCacheFile([]CommitCache{}, ""); err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error updating commits cache: %+v", err)
+			return
+		}
+		j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Infof("updated %d orphand commits from data lake", len(formattedData))
+	}
+
+}
+
 // CommitCache single commit cache schema
 type CommitCache struct {
 	Timestamp      string `json:"timestamp"`
@@ -2834,4 +2899,5 @@ type CommitCache struct {
 	FileLocation   string `json:"file_location"`
 	Hash           string `json:"hash"`
 	Orphaned       bool   `json:"orphaned"`
+	FromDL         bool   `json:"from_dl"`
 }
