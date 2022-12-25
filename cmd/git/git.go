@@ -2867,9 +2867,10 @@ func (j *DSGit) handleDataLakeOrphans() {
 				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error decode datalake orphand commit: %+v", err)
 			}
 			var commit git.Commit
-			err = jsoniter.Unmarshal(commitB, commit)
+			err = jsoniter.Unmarshal(commitB, &commit)
 			if err != nil {
 				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error unmarshall datalake orphand commit: %+v", err)
+				continue
 			}
 			commitEvent := git.CommitUpdatedEvent{
 				CommitBaseEvent: commitBaseEvent,
