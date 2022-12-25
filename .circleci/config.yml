@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: add-update-event #main
+              only: main
             tags:
               ignore: /.*/
       - approve_prod:
