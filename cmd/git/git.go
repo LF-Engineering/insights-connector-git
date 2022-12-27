@@ -2445,6 +2445,13 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			}
 		}
 
+		var content string
+		if len(record) > 7 {
+			if record[7] != "" {
+				content = record[7]
+			}
+		}
+
 		cachedCommits[record[1]] = CommitCache{
 			Timestamp:      record[0],
 			EntityID:       record[1],
@@ -2453,7 +2460,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			Hash:           record[4],
 			Orphaned:       orphaned,
 			FromDL:         fromDL,
-			Content:        record[7],
+			Content:        content,
 		}
 	}
 	if ctx.DateTo != nil {
@@ -2899,6 +2906,7 @@ func (j *DSGit) handleDataLakeOrphans() {
 				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error unmarshall datalake orphand commit: %+v", err)
 				continue
 			}
+			commit.Orphaned = true
 			commitEvent := git.CommitUpdatedEvent{
 				CommitBaseEvent: commitBaseEvent,
 				BaseEvent:       baseEvent,
