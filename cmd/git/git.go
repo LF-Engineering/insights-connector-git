@@ -946,9 +946,13 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
+
+	authorLocation := time.FixedZone(fmt.Sprintf("UTC%v", authorTz), int(authorTz)*60*60)
+	authorLocalDate := time.Date(authorDate.Year(), authorDate.Month(), authorDate.Day(), authorDate.Hour(), authorDate.Minute(), authorDate.Second(), authorDate.Nanosecond(), authorLocation)
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
+	rich["author_local_date"] = authorLocalDate.Format(time.RFC3339)
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -961,8 +965,12 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iAuthorDate)
 		return
 	}
+
+	committerLocation := time.FixedZone(fmt.Sprintf("UTC%v", commitTz), int(commitTz)*60*60)
+	committerLocationDate := time.Date(commitDate.Year(), commitDate.Month(), commitDate.Day(), commitDate.Hour(), commitDate.Minute(), commitDate.Second(), commitDate.Nanosecond(), committerLocation)
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
+	rich["commit_local_date"] = committerLocationDate.Format(time.RFC3339)
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
@@ -1243,6 +1251,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
+		commit.AuthoredLocalTimestamp, _ = doc["author_local_date"].(string)
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.RepositoryID = repoID
@@ -1252,6 +1261,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		}
 		commit.ID = commitID
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
+		commit.CommittedLocalTimestamp, _ = doc["commit_local_date"].(string)
 		createdOn := authoredDt
 		commit.SyncTimestamp = time.Now()
 		commitRoles := []insights.Contributor{}
