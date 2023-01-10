@@ -10,8 +10,8 @@ github.com/DataDog/sketches-go v1.2.1/go.mod h1:1xYmPLY1So10AwxV6MJV0J53XVH+WL9A
 github.com/LF-Engineering/insights-datasource-shared v1.5.21 h1:cZHytRoA5pZHsQlpeasV5K2b2jZ66ikylvNvzlBSj9s=
 github.com/LF-Engineering/insights-datasource-shared v1.5.21/go.mod h1:9DmFQbC8nnm1C7k+/tDo3Rmqzzx7AzmhPBlFouXaBZ8=
 github.com/LF-Engineering/lfx-event-schema v0.1.14/go.mod h1:CfFIZ4mwzo88umf5+KxDQEzqlVkPG7Vx8eLK2oDfWIs=
-github.com/LF-Engineering/lfx-event-schema v0.1.34-0.20221216232638-f07e3eda14cb h1:zoB4nC9NRYkopoWGhNoiqWYU9/B1QoZaTfM0P3nSIqM=
-github.com/LF-Engineering/lfx-event-schema v0.1.34-0.20221216232638-f07e3eda14cb/go.mod h1:CfFIZ4mwzo88umf5+KxDQEzqlVkPG7Vx8eLK2oDfWIs=
+github.com/LF-Engineering/lfx-event-schema v0.1.35 h1:kvhuZxXS6JRclVJJVYkkXbImaResQ+FeeM5k9sQooSE=
+github.com/LF-Engineering/lfx-event-schema v0.1.35/go.mod h1:CfFIZ4mwzo88umf5+KxDQEzqlVkPG7Vx8eLK2oDfWIs=
 github.com/Microsoft/go-winio v0.5.0/go.mod h1:JPGBdM1cNvN/6ISo+n8V5iA4v8pBzdOpzfwIujj1a84=
 github.com/Microsoft/go-winio v0.5.1 h1:aPJp2QD7OOrhO5tQXqQoGSJc+DjDtWTGLOmNyAm6FgY=
 github.com/Microsoft/go-winio v0.5.1/go.mod h1:JPGBdM1cNvN/6ISo+n8V5iA4v8pBzdOpzfwIujj1a84=
