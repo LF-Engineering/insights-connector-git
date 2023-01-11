@@ -2,6 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	b64 "encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,6 +28,7 @@ import (
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
+	"github.com/LF-Engineering/insights-datasource-shared/report"
 	"github.com/LF-Engineering/lfx-event-schema/service"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights"
 	"github.com/LF-Engineering/lfx-event-schema/service/insights/git"
@@ -33,6 +39,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 const (
@@ -511,6 +518,8 @@ var (
 	// max upstream date
 	gMaxUpstreamDt    time.Time
 	gMaxUpstreamDtMtx = &sync.Mutex{}
+	cachedCommits     = make(map[string]CommitCache)
+	commitsCacheFile  = "commits-cache.csv"
 )
 
 // Publisher - for streaming data to Kinesis
@@ -584,6 +593,7 @@ type DSGit struct {
 	log              *logrus.Entry
 	cacheProvider    cache.Manager
 	endpoint         string
+	reportProvider   *report.Manager
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -936,9 +946,13 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
+
+	authorLocation := time.FixedZone(fmt.Sprintf("UTC%v", authorTz), int(authorTz)*60*60)
+	authorLocalDate := time.Date(authorDate.Year(), authorDate.Month(), authorDate.Day(), authorDate.Hour(), authorDate.Minute(), authorDate.Second(), authorDate.Nanosecond(), authorLocation)
 	rich["orphaned"] = false
 	rich["tz"] = authorTz
 	rich["author_date"] = authorDateTz
+	rich["author_local_date"] = authorLocalDate.Format(time.RFC3339)
 	rich["author_date_weekday"] = int(authorDateTz.Weekday())
 	rich["author_date_hour"] = authorDateTz.Hour()
 	rich["utc_author"] = authorDate
@@ -951,8 +965,12 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse commit date from %v", iAuthorDate)
 		return
 	}
+
+	committerLocation := time.FixedZone(fmt.Sprintf("UTC%v", commitTz), int(commitTz)*60*60)
+	committerLocationDate := time.Date(commitDate.Year(), commitDate.Month(), commitDate.Day(), commitDate.Hour(), commitDate.Minute(), commitDate.Second(), commitDate.Nanosecond(), committerLocation)
 	rich["commit_tz"] = commitTz
 	rich["commit_date"] = commitDateTz
+	rich["commit_local_date"] = committerLocationDate.Format(time.RFC3339)
 	rich["commit_date_weekday"] = int(commitDateTz.Weekday())
 	rich["commit_date_hour"] = commitDateTz.Hour()
 	rich["utc_commit"] = commitDate
@@ -1233,6 +1251,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		_, commit.Orphaned = j.OrphanedMap[commit.SHA]
 		commit.ParentSHAs, _ = doc["parents"].([]string)
 		commit.AuthoredTimestamp, _ = doc["author_date"].(time.Time)
+		commit.AuthoredLocalTimestamp, _ = doc["author_local_date"].(string)
 		authoredDt, _ := doc["utc_author"].(time.Time)
 		commit.RepositoryURL, _ = doc["origin"].(string)
 		commit.RepositoryID = repoID
@@ -1242,6 +1261,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 		}
 		commit.ID = commitID
 		commit.CommittedTimestamp, _ = doc["commit_date"].(time.Time)
+		commit.CommittedLocalTimestamp, _ = doc["commit_local_date"].(string)
 		createdOn := authoredDt
 		commit.SyncTimestamp = time.Now()
 		commitRoles := []insights.Contributor{}
@@ -1621,8 +1641,8 @@ func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Debugf("parsing logs from %s", j.GitPath)
 	}
 	// Example full command line:
-	// LANG=C PAGER='' git log --reverse --topo-order --branches --tags --remotes=origin --no-color --decorate --raw --numstat --pretty=fuller --decorate=full --parents -M -C -c
-	cmdLine := []string{"git", "log", "--reverse", "--topo-order", "--branches", "--tags", "--remotes=origin"}
+	// LANG=C PAGER='' git log --reverse --topo-order --tags --no-color --decorate --raw --numstat --pretty=fuller --decorate=full --parents -M -C -c
+	cmdLine := []string{"git", "log", "--reverse", "--topo-order", "--tags"}
 	cmdLine = append(cmdLine, GitLogOptions...)
 	if ctx.DateFrom != nil {
 		cmdLine = append(cmdLine, "--since="+shared.ToYMDHMSDate(*ctx.DateFrom))
@@ -1761,25 +1781,23 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			data := j.GetModelData(ctx, *docs)
 			if j.Publisher != nil {
 				formattedData := make([]interface{}, 0)
-				vals := make([]map[string]interface{}, 0)
+				commits := make([]CommitCache, 0)
 				for _, d := range data {
-					isCreated, err := j.cacheProvider.IsKeyCreated(j.endpoint, d.Payload.ID)
-					if err != nil {
-						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error creating cache for commit %s, error %v", d.Payload.SHA, err)
-						continue
-					}
+					isCreated := isKeyCreated(d.Payload.ID)
 					if !isCreated {
 						formattedData = append(formattedData, d)
-						b, err := json.Marshal(d)
-						if err != nil {
+						b, er := json.Marshal(d)
+						if er != nil {
 							j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error marshall data for commit %s, error %v", d.Payload.SHA, err)
 							continue
 						}
-						vals = append(vals, map[string]interface{}{
-							"id": d.Payload.ID,
-							"data": map[string]interface{}{
-								"content": b,
-							},
+						tStamp := d.Payload.SyncTimestamp.Unix()
+						contentHash := fmt.Sprintf("%x", sha256.Sum256(b))
+						commits = append(commits, CommitCache{
+							Timestamp:      fmt.Sprintf("%v", tStamp),
+							EntityID:       d.Payload.ID,
+							SourceEntityID: d.Payload.SHA,
+							Hash:           contentHash,
 						})
 					}
 				}
@@ -1791,13 +1809,10 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						return
 					}
 				}
-				if len(vals) > 0 {
-					for i, o := range vals {
-						o["data"].(map[string]interface{})["path"] = path
-						vals[i] = o
-					}
-					err = j.cacheProvider.Create(j.endpoint, vals)
+				if err = j.createCacheFile(commits, path); err != nil {
+					return
 				}
+
 			} else {
 				var jsonBytes []byte
 				jsonBytes, err = jsoniter.Marshal(data)
@@ -1814,6 +1829,23 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			if err != nil {
 				return
 			}
+
+			// write report data
+			rData := new(ReportData)
+			rData.NewCommits = int64(len(data))
+			rData.URL = j.URL
+			rData.Date = time.Now().UnixNano()
+
+			b, err := jsoniter.Marshal(rData)
+			if err != nil {
+				return
+			}
+
+			err = j.reportProvider.UpdateFileByKey(fmt.Sprintf("%+v-%+v.json", j.endpoint, time.Now().Unix()), b)
+			if err != nil {
+				return
+			}
+
 		}
 	}
 	if final {
@@ -2391,6 +2423,53 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s resuming from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 		}
 	}
+	comB, err := j.cacheProvider.GetFileByKey(j.endpoint, commitsCacheFile)
+	if err != nil {
+		return
+	}
+	reader := csv.NewReader(bytes.NewBuffer(comB))
+	records, err := reader.ReadAll()
+	if err != nil {
+		return
+	}
+	for i, record := range records {
+		if i == 0 {
+			continue
+		}
+		orphaned, err := strconv.ParseBool(record[5])
+		if err != nil {
+			orphaned = false
+		}
+		if lastSync != "" {
+			orphaned = true
+		}
+
+		var fromDL bool
+		if len(record) > 6 {
+			fromDL, err = strconv.ParseBool(record[6])
+			if err != nil {
+				fromDL = false
+			}
+		}
+
+		var content string
+		if len(record) > 7 {
+			if record[7] != "" {
+				content = record[7]
+			}
+		}
+
+		cachedCommits[record[1]] = CommitCache{
+			Timestamp:      record[0],
+			EntityID:       record[1],
+			SourceEntityID: record[2],
+			FileLocation:   record[3],
+			Hash:           record[4],
+			Orphaned:       orphaned,
+			FromDL:         fromDL,
+			Content:        content,
+		}
+	}
 	if ctx.DateTo != nil {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching till %v (%d threads)", j.URL, ctx.DateTo, thrN)
 	}
@@ -2646,10 +2725,16 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			}
 		}()
 	}
+
+	if lastSync != "" {
+		j.handleDataLakeOrphans()
+	}
 	// NOTE: Non-generic ends here
 	gMaxUpstreamDtMtx.Lock()
 	defer gMaxUpstreamDtMtx.Unlock()
-	err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
+	if !gMaxUpstreamDt.IsZero() {
+		err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
+	}
 	return
 }
 
@@ -2673,6 +2758,27 @@ func main() {
 	shared.SetLogLoggerError(false)
 	shared.AddLogger(&git.Logger, GitDataSource, logger.Internal, []map[string]string{{"REPO_URL": git.URL, "ProjectSlug": ctx.Project}})
 	git.AddCacheProvider()
+	git.AddReportProvider()
+	if os.Getenv("SPAN") != "" {
+		tracer.Start(tracer.WithGlobalTag("connector", "git"))
+		defer tracer.Stop()
+
+		sb := os.Getenv("SPAN")
+		carrier := make(tracer.TextMapCarrier)
+		err = jsoniter.Unmarshal([]byte(sb), &carrier)
+		if err != nil {
+			return
+		}
+		sctx, er := tracer.Extract(carrier)
+		if er != nil {
+			fmt.Println(er)
+		}
+		if err == nil && sctx != nil {
+			span, _ := tracer.StartSpanFromContext(context.Background(), "commit", tracer.ResourceName("connector"), tracer.ChildOf(sctx))
+			defer span.Finish()
+		}
+	}
+
 	err = git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
@@ -2713,7 +2819,153 @@ func (j *DSGit) initStructuredLogger() {
 
 // AddCacheProvider - adds cache provider
 func (j *DSGit) AddCacheProvider() {
-	cacheProvider := cache.NewManager(GitDataSource, os.Getenv("STAGE"))
+	cacheProvider := cache.NewManager(fmt.Sprintf("v2/%s", GitDataSource), os.Getenv("STAGE"))
 	j.cacheProvider = *cacheProvider
 	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "git://"), "http://"), "/", "-")
+}
+
+// AddReportProvider - adds report provider
+func (j *DSGit) AddReportProvider() {
+	reportProvider := report.NewManager(os.Getenv("STAGE"))
+	j.reportProvider = reportProvider
+	j.endpoint = strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(j.URL, "https://"), "git://"), "http://"), "/", "-")
+}
+
+func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
+	for _, comm := range cache {
+		comm.FileLocation = path
+		cachedCommits[comm.EntityID] = comm
+	}
+	records := [][]string{
+		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl", "content"},
+	}
+	for _, c := range cachedCommits {
+		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned), strconv.FormatBool(c.FromDL), c.Content})
+	}
+
+	csvFile, err := os.Create(commitsCacheFile)
+	if err != nil {
+		return err
+	}
+
+	w := csv.NewWriter(csvFile)
+	err = w.WriteAll(records)
+	if err != nil {
+		return err
+	}
+	err = csvFile.Close()
+	if err != nil {
+		return err
+	}
+	file, err := os.ReadFile(commitsCacheFile)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(commitsCacheFile)
+	if err != nil {
+		return err
+	}
+	err = j.cacheProvider.UpdateFileByKey(j.endpoint, commitsCacheFile, file)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func isKeyCreated(id string) bool {
+	c, ok := cachedCommits[id]
+	if ok {
+		c.Orphaned = false
+		cachedCommits[id] = c
+		return true
+	}
+	return false
+}
+
+// handleDataLakeOrphans Update commits in DL with new orphaned status
+func (j *DSGit) handleDataLakeOrphans() {
+	formattedData := make([]interface{}, 0)
+	baseEvent := service.BaseEvent{
+		Type: CommitUpdated,
+		CRUDInfo: service.CRUDInfo{
+			CreatedBy: GitConnector,
+			UpdatedBy: GitConnector,
+			CreatedAt: time.Now().Unix(),
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	commitBaseEvent := git.CommitBaseEvent{
+		Connector:        insights.GitConnector,
+		ConnectorVersion: GitBackendVersion,
+		Source:           insights.Source(j.RepositorySource),
+	}
+
+	for _, v := range cachedCommits {
+		if v.Orphaned && v.FromDL {
+			commitB, err := b64.StdEncoding.DecodeString(v.Content)
+			if err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error decode datalake orphand commit: %+v", err)
+			}
+			var commit git.Commit
+			err = jsoniter.Unmarshal(commitB, &commit)
+			if err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error unmarshall datalake orphand commit: %+v", err)
+				continue
+			}
+			commit.Orphaned = true
+			commitEvent := git.CommitUpdatedEvent{
+				CommitBaseEvent: commitBaseEvent,
+				BaseEvent:       baseEvent,
+				Payload:         commit,
+			}
+			formattedData = append(formattedData, commitEvent)
+		}
+	}
+
+	if len(formattedData) > 0 {
+		path, err := j.Publisher.PushEvents(CommitUpdated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error pushing data lake orphand commits: %+v", err)
+			return
+		}
+		for _, c := range formattedData {
+			id := c.(git.CommitUpdatedEvent).Payload.ID
+			commit := cachedCommits[id]
+			commit.FromDL = false
+			commit.FileLocation = path
+			commit.Content = ""
+			cachedCommits[id] = commit
+		}
+		if err = j.createCacheFile([]CommitCache{}, ""); err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error updating commits cache: %+v", err)
+			return
+		}
+		j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Infof("updated %d orphand commits from data lake", len(formattedData))
+	}
+
+}
+
+// CommitCache single commit cache schema
+type CommitCache struct {
+	Timestamp      string `json:"timestamp"`
+	EntityID       string `json:"entity_id"`
+	SourceEntityID string `json:"source_entity_id"`
+	FileLocation   string `json:"file_location"`
+	Hash           string `json:"hash"`
+	Orphaned       bool   `json:"orphaned"`
+	FromDL         bool   `json:"from_dl"`
+	Content        string `json:"content"`
+}
+
+// ReportData schema
+type ReportData struct {
+	ID              string `json:"id"`
+	SfdcID          string `json:"sfdc_id"`
+	ProjectName     string `json:"project_name"`
+	URL             string `json:"url"`
+	NewCommits      int64  `json:"new_commits"`
+	Date            int64  `json:"date"`
+	SyncStatus      string `json:"sync_status"`
+	OrphanedCommits int64  `json:"orphaned_commits"`
 }
