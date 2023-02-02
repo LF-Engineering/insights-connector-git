@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: fix-wrong-source-author-date #main
+              only: main
             tags:
               ignore: /.*/
       - approve_prod:
