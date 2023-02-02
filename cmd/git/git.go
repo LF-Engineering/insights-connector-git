@@ -1351,7 +1351,7 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 			Payload:         commit,
 		})
 		gMaxUpstreamDtMtx.Lock()
-		if createdOn.After(gMaxUpstreamDt) {
+		if createdOn.After(gMaxUpstreamDt) && createdOn.Before(time.Now()) {
 			gMaxUpstreamDt = createdOn
 		}
 		gMaxUpstreamDtMtx.Unlock()
