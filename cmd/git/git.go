@@ -2576,7 +2576,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		r := make(map[string]clocResult)
 		err = jsoniter.Unmarshal([]byte(sout), &r)
 		if err != nil {
-			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, er)
+			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, err)
 			return
 		}
 		commit["cloc_count"] = r["SUM"].Code
