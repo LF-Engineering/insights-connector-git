@@ -946,7 +946,8 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
-
+	clocCount, _ := shared.Dig(commit, []string{"cloc_count"}, true, false)
+	rich["cloc_count"] = clocCount
 	authorLocation := time.FixedZone(fmt.Sprintf("UTC%v", authorTz), int(authorTz)*60*60)
 	authorLocalDate := time.Date(authorDate.Year(), authorDate.Month(), authorDate.Day(), authorDate.Hour(), authorDate.Minute(), authorDate.Second(), authorDate.Nanosecond(), authorLocation)
 	rich["orphaned"] = false
@@ -1341,6 +1342,10 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 			commit.Files = make([]git.CommitFilesByType, 0)
 			for _, value := range fileCache {
 				commit.Files = append(commit.Files, *value)
+			}
+			if len(commit.Files) > 0 {
+				clocCount, _ := doc["cloc_count"].(int)
+				commit.Files[len(commit.Files)-1].ActualLinesOfCode = clocCount
 			}
 		}
 		commit.MergeCommit = len(fileAry) == 0
@@ -2561,6 +2566,20 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		return
 	}
 	processCommit := func(c chan error, commit map[string]interface{}) (wch chan error, e error) {
+		sha, _ := commit["commit"].(string)
+		cmdLine := []string{"cloc", "commit", sha, "--json"}
+		sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
+			return
+		}
+		r := make(map[string]clocResult)
+		err = jsoniter.Unmarshal([]byte(sout), &r)
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, er)
+			return
+		}
+		commit["cloc_count"] = r["SUM"].Code
 		defer func() {
 			if c != nil {
 				c <- e
@@ -2968,4 +2987,11 @@ type ReportData struct {
 	Date            int64  `json:"date"`
 	SyncStatus      string `json:"sync_status"`
 	OrphanedCommits int64  `json:"orphaned_commits"`
+}
+
+type clocResult struct {
+	Code          int `json:"code"`
+	Blank         int `json:"blank"`
+	Comment       int `json:"comment"`
+	NumberOfFiles int `json:"nFiles"`
 }
