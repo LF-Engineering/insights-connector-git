@@ -1646,8 +1646,8 @@ func (j *DSGit) ParseGitLog(ctx *shared.Ctx) (cmd *exec.Cmd, err error) {
 		j.log.WithFields(logrus.Fields{"operation": "ParseGitLog"}).Debugf("parsing logs from %s", j.GitPath)
 	}
 	// Example full command line:
-	// LANG=C PAGER='' git log --reverse --topo-order --tags --no-color --decorate --raw --numstat --pretty=fuller --decorate=full --parents -M -C -c
-	cmdLine := []string{"git", "log", "--reverse", "--topo-order", "--tags"}
+	// LANG=C PAGER='' git log --reverse --topo-order --no-color --decorate --raw --numstat --pretty=fuller --decorate=full --parents -M -C -c
+	cmdLine := []string{"git", "log", "--reverse", "--topo-order"}
 	cmdLine = append(cmdLine, GitLogOptions...)
 	if ctx.DateFrom != nil {
 		cmdLine = append(cmdLine, "--since="+shared.ToYMDHMSDate(*ctx.DateFrom))
