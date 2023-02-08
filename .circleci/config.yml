@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: main
+              only:  remove-tags-flag #main
             tags:
               ignore: /.*/
       - approve_prod:
