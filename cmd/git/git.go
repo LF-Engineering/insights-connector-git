@@ -524,7 +524,7 @@ var (
 
 // Publisher - for streaming data to Kinesis
 type Publisher interface {
-	PushEvents(action, source, eventType, subEventType, env string, data []interface{}) (string, error)
+	PushEvents(action, source, eventType, subEventType, env string, data []interface{}, endpoint string) (string, error)
 }
 
 // RawPLS - programming language summary (all fields as strings)
@@ -1808,7 +1808,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				}
 				path := ""
 				if len(formattedData) > 0 {
-					path, err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+					path, err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData, j.endpoint)
 					if err != nil {
 						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
 						return
@@ -2943,7 +2943,7 @@ func (j *DSGit) handleDataLakeOrphans() {
 	}
 
 	if len(formattedData) > 0 {
-		path, err := j.Publisher.PushEvents(CommitUpdated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData)
+		path, err := j.Publisher.PushEvents(CommitUpdated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData, j.endpoint)
 		if err != nil {
 			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error pushing data lake orphand commits: %+v", err)
 			return
