@@ -2992,12 +2992,17 @@ func (j *DSGit) handleDataLakeOrphans() {
 			return
 		}
 		for _, c := range formattedData {
-			id := c.(git.CommitUpdatedEvent).Payload.ID
-			commit := cachedCommits[id]
+			payload := c.(git.CommitUpdatedEvent).Payload
+			contentHash, er := createHash(payload)
+			if er != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error hashing commit data: %+v", err)
+				continue
+			}
+			commit := cachedCommits[contentHash]
 			commit.FromDL = false
 			commit.FileLocation = path
 			commit.Content = ""
-			cachedCommits[id] = commit
+			cachedCommits[contentHash] = commit
 		}
 		if err = j.createCacheFile([]CommitCache{}, ""); err != nil {
 			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error updating commits cache: %+v", err)
