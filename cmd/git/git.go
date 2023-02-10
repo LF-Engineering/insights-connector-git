@@ -520,6 +520,7 @@ var (
 	gMaxUpstreamDtMtx = &sync.Mutex{}
 	cachedCommits     = make(map[string]CommitCache)
 	commitsCacheFile  = "commits-cache.csv"
+	createdCommits    = make(map[string]bool)
 )
 
 // Publisher - for streaming data to Kinesis
@@ -1786,36 +1787,67 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 			data := j.GetModelData(ctx, *docs)
 			if j.Publisher != nil {
 				formattedData := make([]interface{}, 0)
+				updatedData := make([]interface{}, 0)
 				commits := make([]CommitCache, 0)
+				updateCommits := make([]CommitCache, 0)
 				for _, d := range data {
-					isCreated := isKeyCreated(d.Payload.ID)
-					if !isCreated {
+					contentHash, er := createHash(d.Payload)
+					if er != nil {
+						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error hash data for commit %s, error %v", d.Payload, err)
+						continue
+					}
+					hashExist := isHashCreated(contentHash)
+					isCreated := isCommitCreated(d.Payload.ID)
+					if !hashExist && !isCreated {
 						formattedData = append(formattedData, d)
-						b, er := json.Marshal(d)
-						if er != nil {
-							j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error marshall data for commit %s, error %v", d.Payload.SHA, err)
-							continue
-						}
 						tStamp := d.Payload.SyncTimestamp.Unix()
-						contentHash := fmt.Sprintf("%x", sha256.Sum256(b))
 						commits = append(commits, CommitCache{
 							Timestamp:      fmt.Sprintf("%v", tStamp),
 							EntityID:       d.Payload.ID,
 							SourceEntityID: d.Payload.SHA,
 							Hash:           contentHash,
 						})
+						createdCommits[d.Payload.ID] = true
 					}
+					if isCreated && !hashExist {
+						updatedEvent := git.CommitUpdatedEvent{
+							CommitBaseEvent: d.CommitBaseEvent,
+							BaseEvent: service.BaseEvent{
+								Type:     CommitUpdated,
+								CRUDInfo: d.BaseEvent.CRUDInfo,
+							},
+							Payload: d.Payload,
+						}
+						updatedData = append(updatedData, updatedEvent)
+						tStamp := d.Payload.SyncTimestamp.Unix()
+						updateCommits = append(updateCommits, CommitCache{
+							Timestamp:      fmt.Sprintf("%v", tStamp),
+							EntityID:       d.Payload.ID,
+							SourceEntityID: d.Payload.SHA,
+							Hash:           contentHash,
+						})
+					}
+
 				}
-				path := ""
 				if len(formattedData) > 0 {
-					path, err = j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData, j.endpoint)
+					path, err := j.Publisher.PushEvents(CommitCreated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData, j.endpoint)
 					if err != nil {
 						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
 						return
 					}
+					if err = j.createCacheFile(commits, path); err != nil {
+						return
+					}
 				}
-				if err = j.createCacheFile(commits, path); err != nil {
-					return
+				if len(updatedData) > 0 {
+					path, err := j.Publisher.PushEvents(CommitUpdated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), updatedData, j.endpoint)
+					if err != nil {
+						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
+						return
+					}
+					if err = j.createCacheFile(updateCommits, path); err != nil {
+						return
+					}
 				}
 
 			} else {
@@ -2428,53 +2460,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s resuming from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 		}
 	}
-	comB, err := j.cacheProvider.GetFileByKey(j.endpoint, commitsCacheFile)
-	if err != nil {
-		return
-	}
-	reader := csv.NewReader(bytes.NewBuffer(comB))
-	records, err := reader.ReadAll()
-	if err != nil {
-		return
-	}
-	for i, record := range records {
-		if i == 0 {
-			continue
-		}
-		orphaned, err := strconv.ParseBool(record[5])
-		if err != nil {
-			orphaned = false
-		}
-		if lastSync != "" {
-			orphaned = true
-		}
-
-		var fromDL bool
-		if len(record) > 6 {
-			fromDL, err = strconv.ParseBool(record[6])
-			if err != nil {
-				fromDL = false
-			}
-		}
-
-		var content string
-		if len(record) > 7 {
-			if record[7] != "" {
-				content = record[7]
-			}
-		}
-
-		cachedCommits[record[1]] = CommitCache{
-			Timestamp:      record[0],
-			EntityID:       record[1],
-			SourceEntityID: record[2],
-			FileLocation:   record[3],
-			Hash:           record[4],
-			Orphaned:       orphaned,
-			FromDL:         fromDL,
-			Content:        content,
-		}
-	}
+	j.getCache(lastSync)
 	if ctx.DateTo != nil {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching till %v (%d threads)", j.URL, ctx.DateTo, thrN)
 	}
@@ -2892,14 +2878,71 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 	return nil
 }
 
-func isKeyCreated(id string) bool {
-	c, ok := cachedCommits[id]
+func isHashCreated(hash string) bool {
+	c, ok := cachedCommits[hash]
 	if ok {
 		c.Orphaned = false
-		cachedCommits[id] = c
+		cachedCommits[hash] = c
 		return true
 	}
 	return false
+}
+
+func (j *DSGit) getCache(lastSync string) {
+	commentBytes, err := j.cacheProvider.GetFileByKey(j.endpoint, commitsCacheFile)
+	if err != nil {
+		return
+	}
+	reader := csv.NewReader(bytes.NewBuffer(commentBytes))
+	records, err := reader.ReadAll()
+	if err != nil {
+		return
+	}
+	for i, record := range records {
+		if i == 0 {
+			continue
+		}
+		orphaned, err := strconv.ParseBool(record[5])
+		if err != nil {
+			orphaned = false
+		}
+		if lastSync != "" {
+			orphaned = true
+		}
+
+		var fromDL bool
+		if len(record) > 6 {
+			fromDL, err = strconv.ParseBool(record[6])
+			if err != nil {
+				fromDL = false
+			}
+		}
+
+		var content string
+		if len(record) > 7 {
+			if record[7] != "" {
+				content = record[7]
+			}
+		}
+
+		cachedCommits[record[4]] = CommitCache{
+			Timestamp:      record[0],
+			EntityID:       record[1],
+			SourceEntityID: record[2],
+			FileLocation:   record[3],
+			Hash:           record[4],
+			Orphaned:       orphaned,
+			FromDL:         fromDL,
+			Content:        content,
+		}
+
+		createdCommits[record[1]] = true
+	}
+}
+
+func isCommitCreated(id string) bool {
+	_, ok := cachedCommits[id]
+	return ok
 }
 
 // handleDataLakeOrphans Update commits in DL with new orphaned status
@@ -2949,12 +2992,17 @@ func (j *DSGit) handleDataLakeOrphans() {
 			return
 		}
 		for _, c := range formattedData {
-			id := c.(git.CommitUpdatedEvent).Payload.ID
-			commit := cachedCommits[id]
+			payload := c.(git.CommitUpdatedEvent).Payload
+			contentHash, er := createHash(payload)
+			if er != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error hashing commit data: %+v", err)
+				continue
+			}
+			commit := cachedCommits[contentHash]
 			commit.FromDL = false
 			commit.FileLocation = path
 			commit.Content = ""
-			cachedCommits[id] = commit
+			cachedCommits[contentHash] = commit
 		}
 		if err = j.createCacheFile([]CommitCache{}, ""); err != nil {
 			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error updating commits cache: %+v", err)
@@ -2963,6 +3011,17 @@ func (j *DSGit) handleDataLakeOrphans() {
 		j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Infof("updated %d orphand commits from data lake", len(formattedData))
 	}
 
+}
+
+func createHash(content git.Commit) (string, error) {
+	content.SyncTimestamp = time.Time{}
+	b, err := json.Marshal(content)
+	if err != nil {
+		return "", err
+	}
+	contentHash := fmt.Sprintf("%x", sha256.Sum256(b))
+
+	return contentHash, err
 }
 
 // CommitCache single commit cache schema
