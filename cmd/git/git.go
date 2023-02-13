@@ -98,6 +98,7 @@ const (
 	Success = "success"
 	// GitConnector ...
 	GitConnector = "git-connector"
+	PackSize     = 300
 )
 
 var (
@@ -760,6 +761,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 	ctx.InitEnv("git")
 	j.AddFlags()
 	ctx.Init()
+	ctx.PackSize = PackSize
 	err = j.ParseArgs(ctx)
 	if err != nil {
 		return
