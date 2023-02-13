@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -24,7 +25,6 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
@@ -98,6 +98,7 @@ const (
 	Success = "success"
 	// GitConnector ...
 	GitConnector = "git-connector"
+	PackSize     = 300
 )
 
 var (
@@ -760,6 +761,7 @@ func (j *DSGit) Init(ctx *shared.Ctx) (err error) {
 	ctx.InitEnv("git")
 	j.AddFlags()
 	ctx.Init()
+	ctx.PackSize = PackSize
 	err = j.ParseArgs(ctx)
 	if err != nil {
 		return
@@ -2436,7 +2438,7 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 
 // Sync - sync git data source
 func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
-	thrN := shared.GetThreadsNum(ctx)
+	thrN := 1 //shared.GetThreadsNum(ctx)
 	lastSync := os.Getenv("LAST_SYNC")
 	if lastSync != "" {
 		i, err := strconv.ParseInt(lastSync, 10, 64)
