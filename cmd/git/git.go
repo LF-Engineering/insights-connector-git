@@ -2966,7 +2966,7 @@ func (j *DSGit) handleDataLakeOrphans() {
 	}
 
 	for _, v := range cachedCommits {
-		if v.Orphaned && v.FromDL {
+		if v.Orphaned {
 			commitB, err := b64.StdEncoding.DecodeString(v.Content)
 			if err != nil {
 				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error decode datalake orphand commit: %+v", err)
