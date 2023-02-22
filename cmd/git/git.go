@@ -1862,9 +1862,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 				j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Infof("%s", string(jsonBytes))
 			}
 			*docs = []interface{}{}
-			gMaxUpstreamDtMtx.Lock()
-			defer gMaxUpstreamDtMtx.Unlock()
-			err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
+			err = j.setLastSync(ctx)
 			if err != nil {
 				return
 			}
@@ -2452,12 +2450,24 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 	}
 	if ctx.DateFrom == nil {
-		cachedLastSync, er := j.cacheProvider.GetLastSync(j.endpoint)
+		lastSyncDataB, er := j.cacheProvider.GetLastSyncFile(j.endpoint)
 		if er != nil {
 			err = er
 			return
 		}
-		ctx.DateFrom = &cachedLastSync
+		var lastSyncData lastSyncFile
+		if er = json.Unmarshal(lastSyncDataB, &lastSyncData); er != nil {
+			var cachedLastSync time.Time
+			err = json.Unmarshal(lastSyncDataB, &cachedLastSync)
+			if err != nil {
+				err = er
+				return
+			}
+			lastSyncData = lastSyncFile{
+				LastSync: cachedLastSync,
+			}
+		}
+		ctx.DateFrom = &lastSyncData.LastSync
 		if ctx.DateFrom != nil {
 			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s resuming from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 		}
@@ -2737,11 +2747,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		j.handleDataLakeOrphans()
 	}
 	// NOTE: Non-generic ends here
-	gMaxUpstreamDtMtx.Lock()
-	defer gMaxUpstreamDtMtx.Unlock()
-	if !gMaxUpstreamDt.IsZero() {
-		err = j.cacheProvider.SetLastSync(j.endpoint, gMaxUpstreamDt)
-	}
+	err = j.setLastSync(ctx)
 	return
 }
 
@@ -3026,6 +3032,74 @@ func createHash(content git.Commit) (string, error) {
 	return contentHash, err
 }
 
+func (j *DSGit) setLastSync(ctx *shared.Ctx) error {
+	commitsCount, err := j.getCommitsCount(ctx)
+	if err != nil {
+		return err
+	}
+
+	commitID, err := j.getHead(ctx)
+	if err != nil {
+		return err
+	}
+
+	gMaxUpstreamDtMtx.Lock()
+	defer gMaxUpstreamDtMtx.Unlock()
+
+	lastSyncData := lastSyncFile{
+		LastSync: gMaxUpstreamDt,
+		Target:   commitsCount,
+		Total:    len(createdCommits),
+		Head:     commitID,
+	}
+
+	lastSyncDataB, err := jsoniter.Marshal(lastSyncData)
+	if err != nil {
+		return err
+	}
+
+	if !gMaxUpstreamDt.IsZero() {
+		err = j.cacheProvider.SetLastSyncFile(j.endpoint, lastSyncDataB)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (j *DSGit) getCommitsCount(ctx *shared.Ctx) (int, error) {
+	count := 0
+	cmdLine := []string{"git", "rev-list", "--count", j.DefaultBranch}
+	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "gitCommitsCount"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
+		return count, err
+	}
+	result := strings.TrimSpace(sout)
+	count, err = strconv.Atoi(result)
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "gitCommitsCount"}).Errorf("error converting: %v, to int error: %v", result, err)
+		return count, err
+	}
+	return count, nil
+}
+
+func (j *DSGit) getHead(ctx *shared.Ctx) (string, error) {
+	if ctx.Debug > 0 {
+		j.log.WithFields(logrus.Fields{"operation": "getHead"}).Debugf("parsing logs from %s", j.GitPath)
+	}
+	// git rev-parse HEAD
+	cmdLine := []string{"git", "rev-parse", "head"}
+	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "getHead"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
+		return "", err
+	}
+	commitID := strings.TrimSpace(sout)
+	return commitID, nil
+}
+
 // CommitCache single commit cache schema
 type CommitCache struct {
 	Timestamp      string `json:"timestamp"`
@@ -3055,4 +3129,11 @@ type clocResult struct {
 	Blank         int `json:"blank"`
 	Comment       int `json:"comment"`
 	NumberOfFiles int `json:"nFiles"`
+}
+
+type lastSyncFile struct {
+	LastSync time.Time `json:"last_sync"`
+	Target   int       `json:"target,omitempty"`
+	Total    int       `json:"total,omitempty"`
+	Head     string    `json:"head,omitempty"`
 }
