@@ -2436,7 +2436,7 @@ func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{},
 
 // Sync - sync git data source
 func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
-	thrN := 1 //shared.GetThreadsNum(ctx)
+	thrN := shared.GetThreadsNum(ctx)
 	lastSync := os.Getenv("LAST_SYNC")
 	if lastSync != "" {
 		i, err := strconv.ParseInt(lastSync, 10, 64)
