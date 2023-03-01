@@ -7,7 +7,9 @@ require (
 	github.com/LF-Engineering/lfx-event-schema v0.1.37
 	github.com/aws/aws-lambda-go v1.27.1
 	github.com/aws/aws-sdk-go v1.42.25
+	github.com/jmoiron/sqlx v1.2.0
 	github.com/json-iterator/go v1.1.11
+	github.com/lib/pq v1.10.2
 	github.com/sirupsen/logrus v1.8.1
 	gopkg.in/DataDog/dd-trace-go.v1 v1.43.0
 )

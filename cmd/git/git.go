@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
@@ -37,7 +37,9 @@ import (
 	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/jmoiron/sqlx"
 	jsoniter "github.com/json-iterator/go"
+	_ "github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
@@ -596,6 +598,7 @@ type DSGit struct {
 	cacheProvider    cache.Manager
 	endpoint         string
 	reportProvider   *report.Manager
+	db               *sqlx.DB
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -2526,6 +2529,14 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		return
 	}
+
+	sourceID, err := j.getSourceID()
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "getSourceID"}).Error(fmt.Errorf("GenerateRepositoryID source id: %s, url: %s, source: %s.error:  %+v", j.SourceID, j.URL, j.RepositorySource, err))
+	}
+	if sourceID != "" {
+		j.SourceID = sourceID
+	}
 	// Continue with operations that need git ops
 	nThreads := 0
 	locFinished := false
@@ -2797,7 +2808,9 @@ func main() {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
 	}
 	shared.FatalOnError(err)
-
+	if err = git.addSourceIdProvider(); err != nil {
+		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error adding source id provider: %+v", err)
+	}
 	err = git.Sync(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
@@ -3098,6 +3111,81 @@ func (j *DSGit) getHead(ctx *shared.Ctx) (string, error) {
 	}
 	commitID := strings.TrimSpace(sout)
 	return commitID, nil
+}
+
+func (j *DSGit) addSourceIdProvider() error {
+	db, err := sqlx.Connect("postgres", os.Getenv("PGConnStr"))
+	if err != nil {
+		return err
+	}
+	db.SetMaxOpenConns(1)    // The default is 0 (unlimited)
+	db.SetMaxIdleConns(10)   // defaultMaxIdleConnections = 10, (0 is unlimited)
+	db.SetConnMaxLifetime(0) // 0, connections are reused forever.
+
+	j.db = db
+	return nil
+}
+
+func (j *DSGit) getSourceID() (string, error) {
+	sourceID := ""
+	if j.RepositorySource == "github" {
+		if j.db == nil {
+			return sourceID, nil
+		}
+
+		query := `select ghr.source_id from v2_github_repositories ghr
+     	where ghr.url = $1`
+		err := j.db.Get(&sourceID, query, j.URL)
+		if err != nil && err.Error() != "sql: no rows in result set" {
+			return sourceID, err
+		}
+	}
+
+	if j.RepositorySource == "gerrit" {
+		const (
+			repoSeparatorGerrit = "/gerrit/"
+			repoSeparatorR      = "/r/"
+		)
+		repoSeparatorList := []string{repoSeparatorR, repoSeparatorGerrit}
+		for _, repoSeparator := range repoSeparatorList {
+			repoSlice := strings.Split(j.URL, repoSeparator)
+			if len(repoSlice) > 1 {
+				if repoSeparator == repoSeparatorGerrit {
+					nRepoSlice := strings.Split(j.URL, repoSeparatorR)
+					if len(nRepoSlice) > 1 {
+						sourceID = strings.TrimSpace(repoSlice[1])
+						break
+					}
+				}
+				sourceID = strings.TrimSpace(repoSlice[1])
+				break
+			}
+		}
+
+		// check if url already contains a partial
+		hasPartial := false
+		u, err := url.Parse(j.URL)
+		if err != nil {
+			return sourceID, err
+		}
+
+		for _, p := range repoSeparatorList {
+			repoSlice := strings.Split(u.Path, p)
+			if len(repoSlice) > 1 {
+				hasPartial = true
+				break
+			}
+		}
+
+		if !hasPartial {
+			repoSlice := strings.Split(j.URL, strings.TrimSpace(fmt.Sprintf("%s://%s", u.Scheme, u.Host)))
+			if len(repoSlice) > 1 {
+				sourceID = strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(repoSlice[1]), "/"), "/")
+			}
+		}
+	}
+
+	return sourceID, nil
 }
 
 // CommitCache single commit cache schema
