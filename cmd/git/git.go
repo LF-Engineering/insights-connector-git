@@ -3040,7 +3040,7 @@ func (j *DSGit) setLastSync(ctx *shared.Ctx) error {
 
 	commitID, err := j.getHead(ctx)
 	if err != nil {
-		return err
+		j.log.WithFields(logrus.Fields{"operation": "getHead"}).Warningf("error getting repository head %v", err)
 	}
 
 	gMaxUpstreamDtMtx.Lock()
