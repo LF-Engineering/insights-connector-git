@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"io"
 	"math"
 	"net/url"
@@ -25,8 +24,11 @@ import (
 
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
+	"github.com/LF-Engineering/insights-datasource-shared/auth0"
+	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
+	"github.com/LF-Engineering/insights-datasource-shared/http"
 	logger "github.com/LF-Engineering/insights-datasource-shared/ingestjob"
 	"github.com/LF-Engineering/insights-datasource-shared/report"
 	"github.com/LF-Engineering/lfx-event-schema/service"
@@ -596,6 +598,7 @@ type DSGit struct {
 	cacheProvider    cache.Manager
 	endpoint         string
 	reportProvider   *report.Manager
+	auth0Client      *auth0.ClientProvider
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -2526,6 +2529,25 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		return
 	}
+
+	sourceID := ""
+	if j.RepositorySource == "github" {
+		sourceID, err = j.getGithubRepoSourceId()
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "sync"}).Error(fmt.Errorf("getGithubRepoSourceId source id: %s, url: %s, source: %s.error:  %+v", j.SourceID, j.URL, j.RepositorySource, err))
+		}
+	}
+
+	if j.RepositorySource == "gerrit" {
+		sourceID, err = j.getGerritRepoSourceId()
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "sync"}).Error(fmt.Errorf("getGerritRepoSourceId source id: %s, url: %s, source: %s.error:  %+v", j.SourceID, j.URL, j.RepositorySource, err))
+		}
+	}
+
+	if sourceID != "" {
+		j.SourceID = sourceID
+	}
 	// Continue with operations that need git ops
 	nThreads := 0
 	locFinished := false
@@ -2797,7 +2819,9 @@ func main() {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("WriteLog Error : %+v", err)
 	}
 	shared.FatalOnError(err)
-
+	if err = git.addAuth0Client(); err != nil {
+		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("addAuth0Client Error : %+v", err)
+	}
 	err = git.Sync(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
@@ -3098,6 +3122,119 @@ func (j *DSGit) getHead(ctx *shared.Ctx) (string, error) {
 	}
 	commitID := strings.TrimSpace(sout)
 	return commitID, nil
+}
+
+func (j *DSGit) addAuth0Client() error {
+	esCacheClientProvider, err := elastic.NewClientProvider(&elastic.Params{
+		URL: os.Getenv("ES_CACHE_URL"),
+	})
+	if err != nil {
+		return err
+	}
+	httpClientProvider := http.NewClientProvider(time.Second*50, true)
+	authEnv := os.Getenv("STAGE")
+	if authEnv == "dev" {
+		authEnv = "test"
+	}
+	auth0Client, err := auth0.NewAuth0Client(
+		authEnv,
+		os.Getenv("AUTH_GRANT_TYPE"),
+		os.Getenv("AUTH_CLIENT_ID"),
+		os.Getenv("AUTH_CLIENT_SECRET"),
+		os.Getenv("AUTH_AUDIENCE"),
+		os.Getenv("AUTH0_URL"),
+		httpClientProvider,
+		esCacheClientProvider,
+		nil,
+		build.AppName)
+	if err != nil {
+		return err
+	}
+	j.auth0Client = auth0Client
+	return nil
+}
+
+func (j *DSGit) getGithubRepoSourceId() (string, error) {
+	sourceID := ""
+	if j.auth0Client == nil {
+		return "", nil
+	}
+
+	type response struct {
+		SourceID int64 `json:"sourceId"`
+	}
+
+	httpClientProvider := http.NewClientProvider(time.Second*50, true)
+	token, err := j.auth0Client.GetToken()
+	if err != nil {
+		return sourceID, err
+	}
+	headers := make(map[string]string)
+	headers["Authorization"] = fmt.Sprintf("Bearer %s", token)
+	orgRepoList := strings.Split(strings.TrimPrefix(j.URL, "https://github.com/"), "/")
+
+	URL := fmt.Sprintf("%sproject/source/github/organization/%s/repository/%s", os.Getenv("INSIGHTS_SERVICE_URL_V2"), orgRepoList[0], orgRepoList[1])
+	statusCode, res, err := httpClientProvider.Request(URL, "GET", headers, nil, nil)
+	if err != nil {
+		return sourceID, err
+	}
+	if statusCode != 200 {
+		return sourceID, fmt.Errorf("error getting source id status code: %d", statusCode)
+	}
+	var repo response
+	if err = jsoniter.Unmarshal(res, &repo); err != nil {
+		return sourceID, err
+	}
+	if repo.SourceID != 0 {
+		sourceID = strconv.FormatInt(repo.SourceID, 10)
+	}
+	return sourceID, nil
+}
+
+func (j *DSGit) getGerritRepoSourceId() (string, error) {
+	sourceID := ""
+	const (
+		repoSeparatorGerrit = "/gerrit/"
+		repoSeparatorR      = "/r/"
+	)
+	repoSeparatorList := []string{repoSeparatorR, repoSeparatorGerrit}
+	for _, repoSeparator := range repoSeparatorList {
+		repoSlice := strings.Split(j.URL, repoSeparator)
+		if len(repoSlice) > 1 {
+			if repoSeparator == repoSeparatorGerrit {
+				nRepoSlice := strings.Split(j.URL, repoSeparatorR)
+				if len(nRepoSlice) > 1 {
+					sourceID = strings.TrimSpace(repoSlice[1])
+					break
+				}
+			}
+			sourceID = strings.TrimSpace(repoSlice[1])
+			break
+		}
+	}
+
+	// check if url already contains a partial
+	hasPartial := false
+	u, err := url.Parse(j.URL)
+	if err != nil {
+		return sourceID, err
+	}
+
+	for _, p := range repoSeparatorList {
+		repoSlice := strings.Split(u.Path, p)
+		if len(repoSlice) > 1 {
+			hasPartial = true
+			break
+		}
+	}
+
+	if !hasPartial {
+		repoSlice := strings.Split(j.URL, strings.TrimSpace(fmt.Sprintf("%s://%s", u.Scheme, u.Host)))
+		if len(repoSlice) > 1 {
+			sourceID = strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(repoSlice[1]), "/"), "/")
+		}
+	}
+	return sourceID, nil
 }
 
 // CommitCache single commit cache schema
