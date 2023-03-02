@@ -640,7 +640,7 @@ func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message s
 		j.log.WithFields(logrus.Fields{"operation": "WriteLog"}).Errorf("getContainerMetadata Error : %+v", err)
 		return err
 	}
-	err := j.Logger.Write(&logger.Log{
+	err = j.Logger.Write(&logger.Log{
 		Connector: GitDataSource,
 		TaskARN:   arn,
 		Configuration: []map[string]string{
