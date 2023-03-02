@@ -25,7 +25,6 @@ import (
 	"github.com/LF-Engineering/insights-datasource-git/build"
 	shared "github.com/LF-Engineering/insights-datasource-shared"
 	"github.com/LF-Engineering/insights-datasource-shared/auth0"
-	"github.com/LF-Engineering/insights-datasource-shared/aws"
 	"github.com/LF-Engineering/insights-datasource-shared/cache"
 	elastic "github.com/LF-Engineering/insights-datasource-shared/elastic"
 	"github.com/LF-Engineering/insights-datasource-shared/http"
@@ -635,12 +634,13 @@ func (j *DSGit) AddLogger(ctx *shared.Ctx) {
 
 // WriteLog - writes to log
 func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message string) error {
-	arn, err := aws.GetContainerARN()
-	if err != nil {
-		j.log.WithFields(logrus.Fields{"operation": "WriteLog"}).Errorf("getContainerMetadata Error : %+v", err)
-		return err
-	}
-	err = j.Logger.Write(&logger.Log{
+	/*	arn, err := aws.GetContainerARN()
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "WriteLog"}).Errorf("getContainerMetadata Error : %+v", err)
+			return err
+		}*/
+	arn := "arn:aws:ecs:us-east-2:395594542180:task/insights-ecs-cluster/1ed1738df8eb4da59c26d2780736724a"
+	err := j.Logger.Write(&logger.Log{
 		Connector: GitDataSource,
 		TaskARN:   arn,
 		Configuration: []map[string]string{
@@ -1825,10 +1825,16 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						}
 						updatedData = append(updatedData, updatedEvent)
 						tStamp := d.Payload.SyncTimestamp.Unix()
+						commitB, err := jsoniter.Marshal(d.Payload)
+						if err != nil {
+							return
+						}
+						commitStr := b64.StdEncoding.EncodeToString(commitB)
 						updateCommits = append(updateCommits, CommitCache{
 							Timestamp:      fmt.Sprintf("%v", tStamp),
 							EntityID:       d.Payload.ID,
 							SourceEntityID: d.Payload.SHA,
+							Content:        commitStr,
 							Hash:           contentHash,
 						})
 					}
@@ -2446,7 +2452,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 		if err != nil {
 			return err
 		}
-		tm := time.Unix(i, 0)
+		tm := time.Unix(i, 0).UTC()
 		ctx.DateFrom = &tm
 	}
 	if ctx.DateFrom != nil {
