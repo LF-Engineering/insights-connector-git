@@ -1801,6 +1801,11 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("error hash data for commit %s, error %v", d.Payload, err)
 						continue
 					}
+					commitB, err := jsoniter.Marshal(d.Payload)
+					if err != nil {
+						return
+					}
+					commitStr := b64.StdEncoding.EncodeToString(commitB)
 					hashExist := isHashCreated(contentHash)
 					isCreated := isCommitCreated(d.Payload.ID)
 					if !hashExist && !isCreated {
@@ -1810,6 +1815,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 							Timestamp:      fmt.Sprintf("%v", tStamp),
 							EntityID:       d.Payload.ID,
 							SourceEntityID: d.Payload.SHA,
+							Content:        commitStr,
 							Hash:           contentHash,
 						})
 						createdCommits[d.Payload.ID] = true
@@ -1825,11 +1831,6 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						}
 						updatedData = append(updatedData, updatedEvent)
 						tStamp := d.Payload.SyncTimestamp.Unix()
-						commitB, err := jsoniter.Marshal(d.Payload)
-						if err != nil {
-							return
-						}
-						commitStr := b64.StdEncoding.EncodeToString(commitB)
 						updateCommits = append(updateCommits, CommitCache{
 							Timestamp:      fmt.Sprintf("%v", tStamp),
 							EntityID:       d.Payload.ID,
