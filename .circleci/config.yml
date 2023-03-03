@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only:  fix-IN-1518 #main
+              only:  main
             tags:
               ignore: /.*/
       - approve_prod:
