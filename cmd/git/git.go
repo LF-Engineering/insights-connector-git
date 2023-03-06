@@ -39,6 +39,8 @@ import (
 	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	goGit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
@@ -2377,6 +2379,115 @@ func (j *DSGit) HandleRecentLines(line string) {
 	}
 }
 
+func (j *DSGit) BuildCommitMap(comm object.Commit) (map[string]interface{}, error) {
+	commit := make(map[string]interface{})
+	commit["commit"] = comm.Hash.String()
+	parents := make([]string, 0)
+	for _, p := range comm.ParentHashes {
+		if !p.IsZero() {
+			parents = append(parents, p.String())
+		}
+	}
+	commit["parents"] = parents
+	commit["refs"] = comm
+	commit["branch"] = j.DefaultBranch
+	commit["message"] = strings.TrimSpace(comm.Message)
+	commit["Author"] = comm.Author.String()
+	commit["Commit"] = comm.Committer.String()
+	commit["CommitDate"] = comm.Committer.When.Format(time.RFC1123Z)
+	commit["AuthorDate"] = comm.Author.When.Format(time.RFC1123Z)
+	files := make([]map[string]interface{}, 0)
+	states, err := comm.Stats()
+	if err != nil {
+		return commit, err
+	}
+
+	fileStates := make(map[string]object.FileStat)
+	doc := false
+	for _, s := range states {
+		fileStates[s.Name] = s
+	}
+
+	allFiles, err := getFilesAction(comm)
+	if err != nil {
+		return commit, err
+	}
+
+	for k, v := range allFiles {
+		s, ok := fileStates[k]
+		if ok {
+			f := make(map[string]interface{})
+			f["file"] = s.Name
+			f["added"] = s.Addition
+			f["removed"] = s.Deletion
+			f["action"] = v
+			if GitDocFilePattern.MatchString(s.Name) {
+				doc = true
+			}
+			files = append(files, f)
+		} else {
+			f := make(map[string]interface{})
+			f["file"] = k
+			f["action"] = v
+			if GitDocFilePattern.MatchString(k) {
+				doc = true
+			}
+			files = append(files, f)
+		}
+
+	}
+
+	commit["files"] = files
+	commit["doc_commit"] = doc
+	return commit, nil
+}
+
+func getFilesAction(com object.Commit) (map[string]string, error) {
+	t, _ := com.Tree()
+	toTree := &object.Tree{}
+	if com.NumParents() != 0 {
+		firstParent, err := com.Parents().Next()
+		if err != nil {
+			return map[string]string{}, err
+		}
+
+		toTree, err = firstParent.Tree()
+		if err != nil {
+			return map[string]string{}, err
+		}
+	}
+	patch, err := toTree.PatchContext(context.Background(), t)
+	if err != nil {
+		return map[string]string{}, err
+	}
+
+	fs := patch.FilePatches()
+	filesAction := make(map[string]string, len(fs))
+	for _, fp := range fs {
+		from, to := fp.Files()
+
+		if from != nil && to != nil {
+			if from.Path() != to.Path() {
+				// file is renamed which we ignored
+				continue
+			}
+			filesAction[from.Path()] = "M"
+			continue
+		}
+
+		if to == nil {
+			filesAction[from.Path()] = "D"
+			continue
+		}
+
+		if from == nil {
+			filesAction[to.Path()] = ""
+			continue
+		}
+	}
+	return filesAction, nil
+}
+
 // ParseNextCommit - parse next git log commit or report end
 func (j *DSGit) ParseNextCommit(ctx *shared.Ctx) (commit map[string]interface{}, ok bool, err error) {
 	for j.LineScanner.Scan() {
@@ -2780,6 +2891,331 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 	return
 }
 
+func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
+	thrN := shared.GetThreadsNum(ctx)
+	lastSync := os.Getenv("LAST_SYNC")
+	if lastSync != "" {
+		i, err := strconv.ParseInt(lastSync, 10, 64)
+		if err != nil {
+			return err
+		}
+		tm := time.Unix(i, 0).UTC()
+		ctx.DateFrom = &tm
+	}
+	if ctx.DateFrom != nil {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
+	}
+	if ctx.DateFrom == nil {
+		lastSyncDataB, er := j.cacheProvider.GetLastSyncFile(j.endpoint)
+		if er != nil {
+			err = er
+			return
+		}
+		var lastSyncData lastSyncFile
+		if er = json.Unmarshal(lastSyncDataB, &lastSyncData); er != nil {
+			var cachedLastSync time.Time
+			err = json.Unmarshal(lastSyncDataB, &cachedLastSync)
+			if err != nil {
+				err = er
+				return
+			}
+			lastSyncData = lastSyncFile{
+				LastSync: cachedLastSync,
+			}
+		}
+		ctx.DateFrom = &lastSyncData.LastSync
+		if ctx.DateFrom != nil {
+			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s resuming from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
+		}
+	}
+	j.getCache(lastSync)
+	if ctx.DateTo != nil {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching till %v (%d threads)", j.URL, ctx.DateTo, thrN)
+	}
+	// NOTE: Non-generic starts here
+	var (
+		ch            chan error
+		allDocs       []interface{}
+		allCommits    []interface{}
+		allCommitsMtx *sync.Mutex
+		escha         []chan error
+		eschaMtx      *sync.Mutex
+		goch          chan error
+		occh          chan error
+		waitLOCMtx    *sync.Mutex
+	)
+	if thrN > 1 {
+		ch = make(chan error)
+		allCommitsMtx = &sync.Mutex{}
+		eschaMtx = &sync.Mutex{}
+		waitLOCMtx = &sync.Mutex{}
+		goch, _ = j.GetGitOps(ctx, thrN)
+	} else {
+		_, err = j.GetGitOps(ctx, thrN)
+		if err != nil {
+			return
+		}
+	}
+	// Do normal git processing, which don't needs gitops yet
+	j.GitPath = j.ReposPath + "/" + j.URL + "-git"
+	j.GitPath, err = shared.EnsurePath(j.GitPath, true)
+	shared.FatalOnError(err)
+	if ctx.Debug > 0 {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("path to store git repository: %s", j.GitPath)
+	}
+
+	comms, err := j.cloneRepo(ctx)
+	if err != nil {
+		return err
+	}
+	if thrN > 1 {
+		occh, _ = j.GetOrphanedCommits(ctx, thrN)
+	} else {
+		_, err = j.GetOrphanedCommits(ctx, thrN)
+		if err != nil {
+			return
+		}
+	}
+	err = j.GetGitBranches(ctx)
+	if err != nil {
+		return
+	}
+
+	sourceID := ""
+	if j.RepositorySource == "github" {
+		sourceID, err = j.getGithubRepoSourceId()
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "sync"}).Error(fmt.Errorf("getGithubRepoSourceId source id: %s, url: %s, source: %s.error:  %+v", j.SourceID, j.URL, j.RepositorySource, err))
+		}
+	}
+
+	if j.RepositorySource == "gerrit" {
+		sourceID, err = j.getGerritRepoSourceId()
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "sync"}).Error(fmt.Errorf("getGerritRepoSourceId source id: %s, url: %s, source: %s.error:  %+v", j.SourceID, j.URL, j.RepositorySource, err))
+		}
+	}
+
+	if sourceID != "" {
+		j.SourceID = sourceID
+	}
+	// Continue with operations that need git ops
+	nThreads := 0
+	locFinished := false
+	waitForLOC := func() (e error) {
+		if thrN == 1 {
+			locFinished = true
+			return
+		}
+		waitLOCMtx.Lock()
+		if !locFinished {
+			if ctx.Debug > 0 {
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debug("waiting for git ops result")
+			}
+			e1 := <-goch
+			e2 := <-occh
+			if e1 != nil && e2 != nil {
+				e = fmt.Errorf("gitops error: %+v, orphaned commits error: %+v", e1, e2)
+			} else {
+				if e1 != nil {
+					e = e1
+				}
+				if e2 != nil {
+					e = e1
+				}
+			}
+			if e != nil {
+				waitLOCMtx.Unlock()
+				return
+			}
+			locFinished = true
+			if ctx.Debug > 0 {
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("loc: %d, programming languages: %d", j.Loc, len(j.Pls))
+			}
+		}
+		waitLOCMtx.Unlock()
+		return
+	}
+	processCommit := func(c chan error, commit map[string]interface{}) (wch chan error, e error) {
+		sha, _ := commit["commit"].(string)
+		cmdLine := []string{"cloc", "commit", sha, "--json"}
+		sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
+			return
+		}
+		r := make(map[string]clocResult)
+		err = jsoniter.Unmarshal([]byte(sout), &r)
+		if err != nil {
+			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, err)
+			return
+		}
+		commit["cloc_count"] = r["SUM"].Code
+		defer func() {
+			if c != nil {
+				c <- e
+			}
+		}()
+		esItem := j.AddMetadata(ctx, commit)
+		if ctx.Project != "" {
+			commit["project"] = ctx.Project
+		}
+		e = waitForLOC()
+		if e != nil {
+			return
+		}
+		commit["total_lines_of_code"] = j.Loc
+		commit["program_language_summary"] = j.Pls
+		esItem["data"] = commit
+		if allCommitsMtx != nil {
+			allCommitsMtx.Lock()
+		}
+		allCommits = append(allCommits, esItem)
+		nCommits := len(allCommits)
+		if nCommits >= ctx.PackSize {
+			sendToQueue := func(c chan error) (ee error) {
+				defer func() {
+					if c != nil {
+						c <- ee
+					}
+				}()
+				// ee = SendToQueue(ctx, j, true, UUID, allCommits)
+				ee = j.GitEnrichItems(ctx, thrN, allCommits, &allDocs, false)
+				if ee != nil {
+					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error %v sending %d commits to queue", ee, len(allCommits))
+				}
+				allCommits = []interface{}{}
+				if allCommitsMtx != nil {
+					allCommitsMtx.Unlock()
+				}
+				return
+			}
+			if thrN > 1 {
+				wch = make(chan error)
+				go func() {
+					_ = sendToQueue(wch)
+				}()
+			} else {
+				e = sendToQueue(nil)
+				if e != nil {
+					return
+				}
+			}
+		} else {
+			if allCommitsMtx != nil {
+				allCommitsMtx.Unlock()
+			}
+		}
+		return
+	}
+	var (
+		commit map[string]interface{}
+	)
+	if thrN > 1 {
+		for i := len(comms) - 1; i >= 0; i-- {
+			commit, err = j.BuildCommitMap(comms[i])
+			if err != nil {
+				return err
+			}
+			go func(com map[string]interface{}) {
+				var (
+					e    error
+					esch chan error
+				)
+				esch, e = processCommit(ch, com)
+				if e != nil {
+					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
+					return
+				}
+				if esch != nil {
+					if eschaMtx != nil {
+						eschaMtx.Lock()
+					}
+					escha = append(escha, esch)
+					if eschaMtx != nil {
+						eschaMtx.Unlock()
+					}
+				}
+			}(commit)
+			nThreads++
+			if nThreads == thrN {
+				err = <-ch
+				if err != nil {
+					return
+				}
+				nThreads--
+			}
+		}
+		for nThreads > 0 {
+			err = <-ch
+			nThreads--
+			if err != nil {
+				return
+			}
+		}
+	} else {
+		for i := len(comms) - 1; i >= 0; i-- {
+			commit, err = j.BuildCommitMap(comms[i])
+			if err != nil {
+				return err
+			}
+			_, err = processCommit(nil, commit)
+			if err != nil {
+				return
+			}
+		}
+	}
+	// NOTE: lock needed
+	if eschaMtx != nil {
+		eschaMtx.Lock()
+	}
+	for _, esch := range escha {
+		err = <-esch
+		if err != nil {
+			if eschaMtx != nil {
+				eschaMtx.Unlock()
+			}
+			return
+		}
+	}
+	if eschaMtx != nil {
+		eschaMtx.Unlock()
+	}
+	if err != nil {
+		return
+	}
+	nCommits := len(allCommits)
+	if ctx.Debug > 0 {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("%d remaining commits to send to queue", nCommits)
+	}
+	// NOTE: for all items, even if 0 - to flush the queue
+	// err = SendToQueue(ctx, j, true, UUID, allCommits)
+	err = j.GitEnrichItems(ctx, thrN, allCommits, &allDocs, true)
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("Error %v sending %d commits to queue", err, len(allCommits))
+	}
+	if !locFinished {
+		go func() {
+			if ctx.Debug > 0 {
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debug("gitops and orphaned commits result not needed, but waiting for orphan process")
+			}
+			<-goch
+			<-occh
+			locFinished = true
+			if ctx.Debug > 0 {
+				j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debug("gitops and orphaned commits result not needed, but waiting for orphan process")
+			}
+		}()
+	}
+
+	if lastSync != "" {
+		j.handleDataLakeOrphans()
+	}
+	// NOTE: Non-generic ends here
+	err = j.setLastSync(ctx)
+	return
+}
+
 func main() {
 	var (
 		ctx shared.Ctx
@@ -2829,7 +3265,7 @@ func main() {
 	if err = git.addAuth0Client(); err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("addAuth0Client Error : %+v", err)
 	}
-	err = git.Sync(&ctx)
+	err = git.SyncV2(&ctx)
 	if err != nil {
 		git.log.WithFields(logrus.Fields{"operation": "main"}).Errorf("Error: %+v", err)
 		er := git.WriteLog(&ctx, timestamp, logger.Failed, err.Error())
@@ -3053,8 +3489,14 @@ func (j *DSGit) handleDataLakeOrphans() {
 }
 
 func createHash(content git.Commit) (string, error) {
-	content.SyncTimestamp = time.Time{}
-	b, err := json.Marshal(content)
+	commitHashFields := CommitHashFields{
+		ID:            content.ID,
+		SHA:           content.SHA,
+		RepositoryURL: content.RepositoryURL,
+		RepositoryID:  content.RepositoryID,
+		Message:       content.Message,
+	}
+	b, err := json.Marshal(commitHashFields)
 	if err != nil {
 		return "", err
 	}
@@ -3121,7 +3563,7 @@ func (j *DSGit) getHead(ctx *shared.Ctx) (string, error) {
 		j.log.WithFields(logrus.Fields{"operation": "getHead"}).Debugf("parsing logs from %s", j.GitPath)
 	}
 	// git rev-parse HEAD
-	cmdLine := []string{"git", "rev-parse", "head"}
+	cmdLine := []string{"git", "rev-parse", "head", j.DefaultBranch}
 	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
 	if err != nil {
 		j.log.WithFields(logrus.Fields{"operation": "getHead"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
@@ -3244,6 +3686,34 @@ func (j *DSGit) getGerritRepoSourceId() (string, error) {
 	return sourceID, nil
 }
 
+func (j *DSGit) cloneRepo(ctx *shared.Ctx) ([]object.Commit, error) {
+	r, err := goGit.PlainClone(j.GitPath, false, &goGit.CloneOptions{
+		URL: j.URL,
+	})
+	if err != nil {
+		return []object.Commit{}, err
+	}
+
+	ref, err := r.Head()
+	if err != nil {
+		return []object.Commit{}, err
+	}
+
+	cIter, err := r.Log(&goGit.LogOptions{
+		From: ref.Hash(),
+		// logOrder 4 is to sort commits desc order by commiter date
+		Order: goGit.LogOrder(4),
+		Since: ctx.DateFrom,
+	})
+
+	commits := make([]object.Commit, 0)
+	err = cIter.ForEach(func(c *object.Commit) error {
+		commits = append(commits, *c)
+		return nil
+	})
+	return commits, nil
+}
+
 // CommitCache single commit cache schema
 type CommitCache struct {
 	Timestamp      string `json:"timestamp"`
@@ -3280,4 +3750,13 @@ type lastSyncFile struct {
 	Target   int       `json:"target,omitempty"`
 	Total    int       `json:"total,omitempty"`
 	Head     string    `json:"head,omitempty"`
+}
+
+// CommitHashFields elected fields from commit schema to hash
+type CommitHashFields struct {
+	ID            string
+	SHA           string
+	RepositoryURL string
+	RepositoryID  string
+	Message       string
 }

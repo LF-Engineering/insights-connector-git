@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only:  main
+              only: sync-v2 #main
             tags:
               ignore: /.*/
       - approve_prod:
