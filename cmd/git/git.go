@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	b64 "encoding/base64"
 	"encoding/csv"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -40,6 +39,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	goGit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/sirupsen/logrus"
@@ -601,6 +601,7 @@ type DSGit struct {
 	endpoint         string
 	reportProvider   *report.Manager
 	auth0Client      *auth0.ClientProvider
+	headCommitHash   string
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -2577,9 +2578,9 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 			return
 		}
 		var lastSyncData lastSyncFile
-		if er = json.Unmarshal(lastSyncDataB, &lastSyncData); er != nil {
+		if er = jsoniter.Unmarshal(lastSyncDataB, &lastSyncData); er != nil {
 			var cachedLastSync time.Time
-			err = json.Unmarshal(lastSyncDataB, &cachedLastSync)
+			err = jsoniter.Unmarshal(lastSyncDataB, &cachedLastSync)
 			if err != nil {
 				err = er
 				return
@@ -2912,9 +2913,9 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 			return
 		}
 		var lastSyncData lastSyncFile
-		if er = json.Unmarshal(lastSyncDataB, &lastSyncData); er != nil {
+		if er = jsoniter.Unmarshal(lastSyncDataB, &lastSyncData); er != nil {
 			var cachedLastSync time.Time
-			err = json.Unmarshal(lastSyncDataB, &cachedLastSync)
+			err = jsoniter.Unmarshal(lastSyncDataB, &cachedLastSync)
 			if err != nil {
 				err = er
 				return
@@ -2964,10 +2965,30 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("path to store git repository: %s", j.GitPath)
 	}
 
-	comms, err := j.cloneRepo(ctx)
+	r, err := j.cloneRepo()
 	if err != nil {
 		return err
 	}
+	firstCommit, err := j.getFirstCommit(ctx, r)
+	if err != nil {
+		return err
+	}
+	from := firstCommit.Author.When
+	if ctx.DateFrom.After(from) {
+		from = *ctx.DateFrom
+	}
+
+	ref, err := r.Head()
+	if err != nil {
+		return err
+	}
+
+	j.headCommitHash = ref.Hash().String()
+	headCommit, err := r.CommitObject(plumbing.NewHash(ref.Hash().String()))
+	if err != nil {
+		return err
+	}
+
 	if thrN > 1 {
 		occh, _ = j.GetOrphanedCommits(ctx, thrN)
 	} else {
@@ -3111,59 +3132,71 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	var (
 		commit map[string]interface{}
 	)
-	if thrN > 1 {
-		for i := len(comms) - 1; i >= 0; i-- {
-			commit, err = j.BuildCommitMap(comms[i])
-			if err != nil {
-				return err
+	for from.Before(headCommit.Author.When) {
+		until := from.Add(24 * time.Hour)
+		comms, er := getRepoCommits(r, from, until)
+		if er != nil {
+			err = er
+			return
+		}
+		if thrN > 1 {
+			for i := len(comms) - 1; i >= 0; i-- {
+				commit, err = j.BuildCommitMap(comms[i])
+				if err != nil {
+					return err
+				}
+				go func(com map[string]interface{}) {
+					var (
+						e    error
+						esch chan error
+					)
+					esch, e = processCommit(ch, com)
+					if e != nil {
+						j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
+						return
+					}
+					if esch != nil {
+						if eschaMtx != nil {
+							eschaMtx.Lock()
+						}
+						escha = append(escha, esch)
+						if eschaMtx != nil {
+							eschaMtx.Unlock()
+						}
+					}
+				}(commit)
+				nThreads++
+				if nThreads == thrN {
+					err = <-ch
+					if err != nil {
+						return
+					}
+					nThreads--
+				}
 			}
-			go func(com map[string]interface{}) {
-				var (
-					e    error
-					esch chan error
-				)
-				esch, e = processCommit(ch, com)
-				if e != nil {
-					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
-					return
-				}
-				if esch != nil {
-					if eschaMtx != nil {
-						eschaMtx.Lock()
-					}
-					escha = append(escha, esch)
-					if eschaMtx != nil {
-						eschaMtx.Unlock()
-					}
-				}
-			}(commit)
-			nThreads++
-			if nThreads == thrN {
+			for nThreads > 0 {
 				err = <-ch
+				nThreads--
 				if err != nil {
 					return
 				}
-				nThreads--
 			}
+		} else {
+
+			for i := len(comms) - 1; i >= 0; i-- {
+				commit, err = j.BuildCommitMap(comms[i])
+				if err != nil {
+					return err
+				}
+				_, err = processCommit(nil, commit)
+				if err != nil {
+					return
+				}
+			}
+
 		}
-		for nThreads > 0 {
-			err = <-ch
-			nThreads--
-			if err != nil {
-				return
-			}
-		}
-	} else {
-		for i := len(comms) - 1; i >= 0; i-- {
-			commit, err = j.BuildCommitMap(comms[i])
-			if err != nil {
-				return err
-			}
-			_, err = processCommit(nil, commit)
-			if err != nil {
-				return
-			}
-		}
+		from = until
+		until = until.Add(24 * time.Hour)
 	}
 	// NOTE: lock needed
 	if eschaMtx != nil {
@@ -3496,7 +3529,7 @@ func createHash(content git.Commit) (string, error) {
 		RepositoryID:  content.RepositoryID,
 		Message:       content.Message,
 	}
-	b, err := json.Marshal(commitHashFields)
+	b, err := jsoniter.Marshal(commitHashFields)
 	if err != nil {
 		return "", err
 	}
@@ -3559,18 +3592,7 @@ func (j *DSGit) getCommitsCount(ctx *shared.Ctx) (int, error) {
 }
 
 func (j *DSGit) getHead(ctx *shared.Ctx) (string, error) {
-	if ctx.Debug > 0 {
-		j.log.WithFields(logrus.Fields{"operation": "getHead"}).Debugf("parsing logs from %s", j.GitPath)
-	}
-	// git rev-parse HEAD
-	cmdLine := []string{"git", "rev-parse", "head", j.DefaultBranch}
-	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
-	if err != nil {
-		j.log.WithFields(logrus.Fields{"operation": "getHead"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
-		return "", err
-	}
-	commitID := strings.TrimSpace(sout)
-	return commitID, nil
+	return j.headCommitHash, nil
 }
 
 func (j *DSGit) addAuth0Client() error {
@@ -3686,24 +3708,28 @@ func (j *DSGit) getGerritRepoSourceId() (string, error) {
 	return sourceID, nil
 }
 
-func (j *DSGit) cloneRepo(ctx *shared.Ctx) ([]object.Commit, error) {
+func (j *DSGit) cloneRepo() (*goGit.Repository, error) {
 	r, err := goGit.PlainClone(j.GitPath, false, &goGit.CloneOptions{
 		URL: j.URL,
 	})
 	if err != nil {
-		return []object.Commit{}, err
+		return r, err
 	}
 
+	return r, nil
+}
+
+func getRepoCommits(r *goGit.Repository, since time.Time, until time.Time) ([]object.Commit, error) {
 	ref, err := r.Head()
 	if err != nil {
 		return []object.Commit{}, err
 	}
-
 	cIter, err := r.Log(&goGit.LogOptions{
 		From: ref.Hash(),
 		// logOrder 4 is to sort commits desc order by commiter date
 		Order: goGit.LogOrder(4),
-		Since: ctx.DateFrom,
+		Since: &since,
+		Until: &until,
 	})
 
 	commits := make([]object.Commit, 0)
@@ -3712,6 +3738,22 @@ func (j *DSGit) cloneRepo(ctx *shared.Ctx) ([]object.Commit, error) {
 		return nil
 	})
 	return commits, nil
+}
+
+func (j *DSGit) getFirstCommit(ctx *shared.Ctx, r *goGit.Repository) (*object.Commit, error) {
+	//git log --pretty=oneline --reverse | head -1
+	cmdLine := []string{"git", "log", "--pretty=oneline", "--reverse", "|", "head", "-1"}
+	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
+		return nil, err
+	}
+	fCommit := strings.Split(strings.TrimSpace(sout), " ")
+	firstCommit, err := r.CommitObject(plumbing.NewHash(fCommit[0]))
+	if err != nil {
+		return firstCommit, err
+	}
+	return firstCommit, nil
 }
 
 // CommitCache single commit cache schema
