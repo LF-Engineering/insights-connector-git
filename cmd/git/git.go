@@ -3123,9 +3123,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		}
 		return
 	}
-	var (
-		commit map[string]interface{}
-	)
+
 	counter := 0
 	for from.Before(headCommit.Author.When) {
 		until := from.Add(24 * time.Hour * 365)
@@ -3136,16 +3134,16 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		}
 		if thrN > 1 {
 			for i := len(comms) - 1; i >= 0; i-- {
-				commit, err = j.BuildCommitMap(comms[i])
+				var c map[string]interface{}
+				c, err = j.BuildCommitMap(comms[i])
 				if err != nil {
 					return err
 				}
-				go func(com map[string]interface{}) {
 					var (
 						e    error
 						esch chan error
 					)
-					esch, e = processCommit(ch, com)
+					esch, e = processCommit(ch, c)
 					if e != nil {
 						j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
 						return
@@ -3159,7 +3157,6 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 							eschaMtx.Unlock()
 						}
 					}
-				}(commit)
 				nThreads++
 				if nThreads == thrN {
 					err = <-ch
@@ -3179,11 +3176,12 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		} else {
 
 			for i := len(comms) - 1; i >= 0; i-- {
-				commit, err = j.BuildCommitMap(comms[i])
+				var com map[string]interface{}
+				com, err = j.BuildCommitMap(comms[i])
 				if err != nil {
 					return err
 				}
-				_, err = processCommit(nil, commit)
+				_, err = processCommit(nil, com)
 				if err != nil {
 					return
 				}
