@@ -3057,7 +3057,6 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		return
 	}
 	processCommit := func(c chan error, commit map[string]interface{}) (wch chan error, e error) {
-		return nil, nil
 		sha, _ := commit["commit"].(string)
 		cmdLine := []string{"cloc", "commit", sha, "--json"}
 		sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
