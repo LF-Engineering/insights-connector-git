@@ -43,7 +43,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 const (
@@ -2893,7 +2892,7 @@ func (j *DSGit) Sync(ctx *shared.Ctx) (err error) {
 }
 
 func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
-	thrN := shared.GetThreadsNum(ctx)
+	thrN := 1 //shared.GetThreadsNum(ctx)
 	lastSync := os.Getenv("LAST_SYNC")
 	if lastSync != "" {
 		i, err := strconv.ParseInt(lastSync, 10, 64)
@@ -3133,8 +3132,9 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	var (
 		commit map[string]interface{}
 	)
+	counter := 0
 	for from.Before(headCommit.Author.When) {
-		until := from.Add(24 * time.Hour)
+		until := from.Add(24 * time.Hour * 3650)
 		comms, er := getRepoCommits(r, from, until)
 		if er != nil {
 			err = er
@@ -3192,6 +3192,10 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 				_, err = processCommit(nil, commit)
 				if err != nil {
 					return
+				}
+				counter++
+				if counter%100 == 0 && counter != 0 {
+					fmt.Println("processed ", counter, " commits")
 				}
 			}
 
@@ -3271,7 +3275,7 @@ func main() {
 	shared.AddLogger(&git.Logger, GitDataSource, logger.Internal, []map[string]string{{"REPO_URL": git.URL, "ProjectSlug": ctx.Project}})
 	git.AddCacheProvider()
 	git.AddReportProvider()
-	if os.Getenv("SPAN") != "" {
+	/*	if os.Getenv("SPAN") != "" {
 		tracer.Start(tracer.WithGlobalTag("connector", "git"))
 		defer tracer.Stop()
 
@@ -3289,7 +3293,7 @@ func main() {
 			span, _ := tracer.StartSpanFromContext(context.Background(), "commit", tracer.ResourceName("connector"), tracer.ChildOf(sctx))
 			defer span.Finish()
 		}
-	}
+	}*/
 
 	err = git.WriteLog(&ctx, timestamp, logger.InProgress, "")
 	if err != nil {
