@@ -3740,16 +3740,16 @@ func getRepoCommits(r *goGit.Repository, since time.Time, until time.Time) ([]ob
 	return commits, nil
 }
 
-func (j *DSGit) getFirstCommit(ctx *shared.Ctx, r *goGit.Repository) (*object.Commit, error) {
+func (j *DSGit) getFirstCommit(ctx *shared.Ctx, repo *goGit.Repository) (*object.Commit, error) {
 	//git log --pretty=oneline --reverse | head -1
-	cmdLine := []string{"git", "log", "--pretty=oneline", "--reverse", "|", "head", "-1"}
-	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	cmd := fmt.Sprintf("cd %s; git log --pretty=oneline --reverse | head -1", j.GitPath)
+	output, err := exec.Command("bash", "-c", cmd).Output()
 	if err != nil {
-		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
 		return nil, err
 	}
-	fCommit := strings.Split(strings.TrimSpace(sout), " ")
-	firstCommit, err := r.CommitObject(plumbing.NewHash(fCommit[0]))
+
+	fCommit := strings.Split(strings.TrimSpace(string(output)), " ")
+	firstCommit, err := repo.CommitObject(plumbing.NewHash(fCommit[0]))
 	if err != nil {
 		return firstCommit, err
 	}
