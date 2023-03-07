@@ -3057,20 +3057,22 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		return
 	}
 	processCommit := func(c chan error, commit map[string]interface{}) (wch chan error, e error) {
-		/*		sha, _ := commit["commit"].(string)
-				cmdLine := []string{"cloc", "commit", sha, "--json"}
-				sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
-				if err != nil {
-					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
-					return
-				}
-				r := make(map[string]clocResult)
-				err = jsoniter.Unmarshal([]byte(sout), &r)
-				if err != nil {
-					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, err)
-					return
-				}
-				commit["cloc_count"] = r["SUM"].Code*/
+		/*				sha, _ := commit["commit"].(string)
+						cmdLine := []string{"cloc", "commit", sha, "--json"}
+						sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+						if err != nil {
+							j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
+							return
+						}
+						r := make(map[string]clocResult)
+						err = jsoniter.Unmarshal([]byte(sout), &r)
+						if err != nil {
+							j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, err)
+							return
+						}
+						commit["cloc_count"] = r["SUM"].Code*/
+		commit["cloc_count"] = 100
+
 		defer func() {
 			if c != nil {
 				c <- e
