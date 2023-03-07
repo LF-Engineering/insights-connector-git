@@ -38,10 +38,10 @@ import (
 	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	jsoniter "github.com/json-iterator/go"
 	goGit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/sirupsen/logrus"
 )
 
