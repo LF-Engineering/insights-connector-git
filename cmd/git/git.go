@@ -101,7 +101,7 @@ const (
 	Success = "success"
 	// GitConnector ...
 	GitConnector = "git-connector"
-	PackSize     = 300
+	PackSize     = 1000
 )
 
 var (
@@ -601,6 +601,7 @@ type DSGit struct {
 	reportProvider   *report.Manager
 	auth0Client      *auth0.ClientProvider
 	headCommitHash   string
+	headLinesOfCode int
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -954,7 +955,7 @@ func (j *DSGit) EnrichItem(ctx *shared.Ctx, item map[string]interface{}) (rich m
 		err = fmt.Errorf("cannot parse author date from %v", iAuthorDate)
 		return
 	}
-	clocCount, _ := shared.Dig(commit, []string{"cloc_count"}, true, false)
+	clocCount, _ := shared.Dig(commit, []string{"cloc_count"}, false, true)
 	rich["cloc_count"] = clocCount
 	authorLocation := time.FixedZone(fmt.Sprintf("UTC%v", authorTz), int(authorTz)*60*60)
 	authorLocalDate := time.Date(authorDate.Year(), authorDate.Month(), authorDate.Day(), authorDate.Hour(), authorDate.Minute(), authorDate.Second(), authorDate.Nanosecond(), authorLocation)
@@ -1353,7 +1354,9 @@ func (j *DSGit) GetModelData(ctx *shared.Ctx, docs []interface{}) []git.CommitCr
 			}
 			if len(commit.Files) > 0 {
 				clocCount, _ := doc["cloc_count"].(int)
-				commit.Files[len(commit.Files)-1].ActualLinesOfCode = clocCount
+				if clocCount != 0 {
+					commit.Files[len(commit.Files)-1].ActualLinesOfCode = clocCount
+				}
 			}
 		}
 		commit.MergeCommit = len(fileAry) == 0
@@ -2987,7 +2990,9 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		return err
 	}
-
+	if err = j.getCloc(ctx, j.headCommitHash); err != nil {
+		return err
+	}
 	if thrN > 1 {
 		occh, _ = j.GetOrphanedCommits(ctx, thrN)
 	} else {
@@ -3057,22 +3062,10 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		return
 	}
 	processCommit := func(c chan error, commit map[string]interface{}) (wch chan error, e error) {
-		/*				sha, _ := commit["commit"].(string)
-						cmdLine := []string{"cloc", "commit", sha, "--json"}
-						sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
-						if err != nil {
-							j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
-							return
-						}
-						r := make(map[string]clocResult)
-						err = jsoniter.Unmarshal([]byte(sout), &r)
-						if err != nil {
-							j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, err)
-							return
-						}
-						commit["cloc_count"] = r["SUM"].Code*/
-		commit["cloc_count"] = 100
-
+		sha, _ := commit["commit"].(string)
+		if sha == j.headCommitHash {
+			commit["cloc_count"] = j.headLinesOfCode
+		}
 		defer func() {
 			if c != nil {
 				c <- e
@@ -3135,7 +3128,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	)
 	counter := 0
 	for from.Before(headCommit.Author.When) {
-		until := from.Add(24 * time.Hour * 3650)
+		until := from.Add(24 * time.Hour * 365)
 		comms, er := getRepoCommits(r, from, until)
 		if er != nil {
 			err = er
@@ -3760,6 +3753,23 @@ func (j *DSGit) getFirstCommit(ctx *shared.Ctx, repo *goGit.Repository) (*object
 		return firstCommit, err
 	}
 	return firstCommit, nil
+}
+
+func (j *DSGit) getCloc(ctx *shared.Ctx, headSha string) error{
+	cmdLine := []string{"cloc", "commit", headSha, "--json"}
+	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
+		return err
+	}
+	r := make(map[string]clocResult)
+	err = jsoniter.Unmarshal([]byte(sout), &r)
+	if err != nil {
+		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error unmarshall: %v, error: %v", sout, err)
+		return err
+	}
+	j.headLinesOfCode = r["SUM"].Code
+	return nil
 }
 
 // CommitCache single commit cache schema
