@@ -2975,6 +2975,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		return err
 	}
+
 	firstCommit, err := j.getFirstCommit(ctx, r)
 	if err != nil {
 		return err
@@ -3712,11 +3713,12 @@ func (j *DSGit) getGerritRepoSourceId() (string, error) {
 func (j *DSGit) cloneRepo() (*goGit.Repository, error) {
 	r, err := goGit.PlainClone(j.GitPath, false, &goGit.CloneOptions{
 		URL: j.URL,
+		SingleBranch: true,
 	})
 	if err != nil {
 		return r, err
 	}
-
+	fmt.Println("repository cloned successfully")
 	return r, nil
 }
 
