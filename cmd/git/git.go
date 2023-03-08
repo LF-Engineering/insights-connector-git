@@ -601,7 +601,7 @@ type DSGit struct {
 	reportProvider   *report.Manager
 	auth0Client      *auth0.ClientProvider
 	headCommitHash   string
-	headLinesOfCode int
+	headLinesOfCode  int
 }
 
 // PublisherPushEvents - this is a fake function to test publisher locally
@@ -3144,24 +3144,24 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 				if err != nil {
 					return err
 				}
-					var (
-						e    error
-						esch chan error
-					)
-					esch, e = processCommit(ch, c)
-					if e != nil {
-						j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
-						return
+				var (
+					e    error
+					esch chan error
+				)
+				esch, e = processCommit(ch, c)
+				if e != nil {
+					j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("process error: %v", e)
+					return
+				}
+				if esch != nil {
+					if eschaMtx != nil {
+						eschaMtx.Lock()
 					}
-					if esch != nil {
-						if eschaMtx != nil {
-							eschaMtx.Lock()
-						}
-						escha = append(escha, esch)
-						if eschaMtx != nil {
-							eschaMtx.Unlock()
-						}
+					escha = append(escha, esch)
+					if eschaMtx != nil {
+						eschaMtx.Unlock()
 					}
+				}
 				nThreads++
 				if nThreads == thrN {
 					err = <-ch
@@ -3713,7 +3713,6 @@ func (j *DSGit) getGerritRepoSourceId() (string, error) {
 func (j *DSGit) cloneRepo() (*goGit.Repository, error) {
 	r, err := goGit.PlainClone(j.GitPath, false, &goGit.CloneOptions{
 		URL: j.URL,
-		SingleBranch: true,
 	})
 	if err != nil {
 		return r, err
@@ -3759,7 +3758,7 @@ func (j *DSGit) getFirstCommit(ctx *shared.Ctx, repo *goGit.Repository) (*object
 	return firstCommit, nil
 }
 
-func (j *DSGit) getCloc(ctx *shared.Ctx, headSha string) error{
+func (j *DSGit) getCloc(ctx *shared.Ctx, headSha string) error {
 	cmdLine := []string{"cloc", "commit", headSha, "--json"}
 	sout, serr, err := shared.ExecCommand(ctx, cmdLine, j.GitPath, GitDefaultEnv)
 	if err != nil {
