@@ -3712,9 +3712,10 @@ func (j *DSGit) getGerritRepoSourceId() (string, error) {
 }
 
 func (j *DSGit) cloneRepo() (*goGit.Repository, error) {
-	r, err := goGit.PlainClone(j.GitPath, true, &goGit.CloneOptions{
-		URL:  j.URL,
-		Tags: goGit.NoTags,
+	r, err := goGit.PlainClone(j.GitPath, false, &goGit.CloneOptions{
+		URL:      j.URL,
+		Tags:     goGit.NoTags,
+		Progress: os.Stdout,
 	})
 	if err != nil {
 		return r, err
