@@ -38,9 +38,12 @@ import (
 	"github.com/LF-Engineering/lfx-event-schema/utils/datalake"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/go-git/go-billy/v5/osfs"
 	goGit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	gitCache "github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/storage/filesystem"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/sirupsen/logrus"
 )
@@ -2972,7 +2975,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Debugf("path to store git repository: %s", j.GitPath)
 	}
 
-	r, err := j.cloneRepo()
+	r, err := j.cloneRepoCommand(ctx)
 	if err != nil {
 		return err
 	}
@@ -3720,6 +3723,31 @@ func (j *DSGit) cloneRepo() (*goGit.Repository, error) {
 	if err != nil {
 		return r, err
 	}
+	fmt.Println("repository cloned successfully")
+	return r, nil
+}
+
+func (j *DSGit) cloneRepoCommand(ctx *shared.Ctx) (*goGit.Repository, error) {
+	if err := j.CreateGitRepo(ctx); err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+
+	fs := osfs.New(j.GitPath)
+	if _, err := fs.Stat(goGit.GitDirName); err == nil {
+		fs, err = fs.Chroot(goGit.GitDirName)
+		if err != nil {
+			fmt.Println(err)
+			return nil, err
+		}
+	}
+	s := filesystem.NewStorageWithOptions(fs, gitCache.NewObjectLRUDefault(), filesystem.Options{KeepDescriptors: true})
+	r, err := goGit.Open(s, fs)
+	if err != nil {
+		fmt.Println(err)
+		return r, err
+	}
+
 	fmt.Println("repository cloned successfully")
 	return r, nil
 }
