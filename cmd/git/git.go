@@ -649,6 +649,7 @@ func (j *DSGit) WriteLog(ctx *shared.Ctx, timestamp time.Time, status, message s
 		Configuration: []map[string]string{
 			{
 				"REPO_URL":    j.URL,
+				"repo_slug":   j.endpoint,
 				"ProjectSlug": ctx.Project,
 			}},
 		Status:    status,
@@ -3711,7 +3712,7 @@ func (j *DSGit) getGerritRepoSourceId() (string, error) {
 }
 
 func (j *DSGit) cloneRepo() (*goGit.Repository, error) {
-	r, err := goGit.PlainClone(j.GitPath, false, &goGit.CloneOptions{
+	r, err := goGit.PlainClone(j.GitPath, true, &goGit.CloneOptions{
 		URL: j.URL,
 	})
 	if err != nil {
