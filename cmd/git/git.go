@@ -3133,9 +3133,8 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 		return
 	}
 
-	counter := 0
 	for from.Before(headCommit.Author.When) {
-		until := from.Add(24 * time.Hour * 365)
+		until := from.Add(24 * time.Hour * 185)
 		comms, er := getRepoCommits(r, from, until)
 		if er != nil {
 			err = er
@@ -3193,10 +3192,6 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 				_, err = processCommit(nil, com)
 				if err != nil {
 					return
-				}
-				counter++
-				if counter%100 == 0 && counter != 0 {
-					fmt.Println("processed ", counter, " commits")
 				}
 			}
 
