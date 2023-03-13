@@ -3134,7 +3134,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	}
 
 	for from.Before(headCommit.Author.When) {
-		until := from.Add(24 * time.Hour * 90)
+		until := from.Add(24 * time.Hour * 30)
 		comms, er := getRepoCommits(r, from, until)
 		if er != nil {
 			err = er
