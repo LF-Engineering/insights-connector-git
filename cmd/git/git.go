@@ -3791,6 +3791,11 @@ func (j *DSGit) getCloc(ctx *shared.Ctx, headSha string) error {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Errorf("error executing command: %v, error: %v, output: %s, output error: %s", cmdLine, err, sout, serr)
 		return err
 	}
+
+	if sout == "" {
+		return nil
+	}
+
 	r := make(map[string]clocResult)
 	err = jsoniter.Unmarshal([]byte(sout), &r)
 	if err != nil {
