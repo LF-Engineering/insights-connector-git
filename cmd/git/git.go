@@ -105,6 +105,7 @@ const (
 	// GitConnector ...
 	GitConnector = "git-connector"
 	PackSize     = 1000
+	HotRepoCount = 5000
 )
 
 var (
@@ -523,11 +524,16 @@ var (
 	// GitTrailerPPAuthors - trailer name to authors map (for pair programming)
 	GitTrailerPPAuthors = map[string]string{"Signed-off-by": "authors_signed_off", "Co-authored-by": "co_authors"}
 	// max upstream date
-	gMaxUpstreamDt    time.Time
-	gMaxUpstreamDtMtx = &sync.Mutex{}
-	cachedCommits     = make(map[string]CommitCache)
-	commitsCacheFile  = "commits-cache.csv"
-	createdCommits    = make(map[string]bool)
+	gMaxUpstreamDt         time.Time
+	gMaxUpstreamDtMtx      = &sync.Mutex{}
+	cachedCommits          = make(map[string]CommitCache)
+	commitsCacheFile       = "commits-cache.csv"
+	createdCommits         = make(map[string]bool)
+	IsHotRep               = false
+	CommitsByYearCacheFile = "commits-cache-%s.csv"
+	CommitsUpdateCacheFile = "commits-update-cache.csv"
+	CurrentCacheYear       = 1970
+	CachedCommitsUpdates   = make(map[string]CommitCache)
 )
 
 // Publisher - for streaming data to Kinesis
@@ -1826,6 +1832,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 							SourceEntityID: d.Payload.SHA,
 							Content:        commitStr,
 							Hash:           contentHash,
+							CommitDate:     d.Payload.CommittedTimestamp,
 						})
 						createdCommits[d.Payload.ID] = true
 					}
@@ -1846,6 +1853,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 							SourceEntityID: d.Payload.SHA,
 							Content:        commitStr,
 							Hash:           contentHash,
+							CommitDate:     d.Payload.CommittedTimestamp,
 						})
 					}
 
@@ -1856,8 +1864,14 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
 						return
 					}
-					if err = j.createCacheFile(commits, path); err != nil {
-						return
+					if !IsHotRep {
+						if err = j.createCacheFile(commits, path); err != nil {
+							return
+						}
+					} else {
+						if err = j.createYearCacheFile(commits, path); err != nil {
+							return
+						}
 					}
 				}
 				if len(updatedData) > 0 {
@@ -1866,9 +1880,16 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						j.log.WithFields(logrus.Fields{"operation": "GitEnrichItems"}).Errorf("Error: %+v", err)
 						return
 					}
-					if err = j.createCacheFile(updateCommits, path); err != nil {
-						return
+					if !IsHotRep {
+						if err = j.createCacheFile(updateCommits, path); err != nil {
+							return
+						}
+					} else {
+						if err = j.createUpdateCacheFile(updateCommits, path); err != nil {
+							return
+						}
 					}
+
 				}
 
 			} else {
@@ -2939,7 +2960,6 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 			j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s resuming from %v (%d threads)", j.URL, ctx.DateFrom, thrN)
 		}
 	}
-	j.getCache(lastSync)
 	if ctx.DateTo != nil {
 		j.log.WithFields(logrus.Fields{"operation": "Sync"}).Infof("%s fetching till %v (%d threads)", j.URL, ctx.DateTo, thrN)
 	}
@@ -2984,7 +3004,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		return err
 	}
-	from := firstCommit.Author.When
+	from := firstCommit.Author.When.Add(time.Second * -60)
 	if ctx.DateFrom.After(from) {
 		from = *ctx.DateFrom
 	}
@@ -3131,6 +3151,18 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 			}
 		}
 		return
+	}
+
+	commitsCount, err := j.getCommitsCount(ctx)
+	if err != nil {
+		return err
+	}
+	if commitsCount >= HotRepoCount {
+		IsHotRep = true
+		j.getYearCache(lastSync)
+		j.getUpdateCache(lastSync)
+	} else {
+		j.getCache(lastSync)
 	}
 
 	for from.Before(headCommit.Author.When) {
@@ -3387,6 +3419,104 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 	return nil
 }
 
+func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
+	nextYearCache := make([]CommitCache, 0)
+	for _, comm := range cache {
+		comm.FileLocation = path
+		if comm.CommitDate.Year() == CurrentCacheYear {
+			cachedCommits[comm.EntityID] = comm
+		} else {
+			nextYearCache = append(nextYearCache, comm)
+		}
+	}
+	records := [][]string{
+		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl", "content"},
+	}
+	for _, c := range cachedCommits {
+		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned), strconv.FormatBool(c.FromDL), c.Content})
+	}
+
+	yearSTR := strconv.Itoa(CurrentCacheYear)
+	cacheFile := fmt.Sprintf(CommitsByYearCacheFile, yearSTR)
+	csvFile, err := os.Create(cacheFile)
+	if err != nil {
+		return err
+	}
+
+	w := csv.NewWriter(csvFile)
+	err = w.WriteAll(records)
+	if err != nil {
+		return err
+	}
+	err = csvFile.Close()
+	if err != nil {
+		return err
+	}
+	file, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(cacheFile)
+	if err != nil {
+		return err
+	}
+	err = j.cacheProvider.UpdateFileByKey(j.endpoint, cacheFile, file)
+	if err != nil {
+		return err
+	}
+	if len(nextYearCache) > 0 {
+		CurrentCacheYear = nextYearCache[0].CommitDate.Year()
+		if err = j.createYearCacheFile(nextYearCache, path); err != nil {
+			return err
+		}
+		cachedCommits = make(map[string]CommitCache)
+		j.getYearCache(os.Getenv("LAST_SYNC"))
+	}
+	return nil
+}
+
+func (j *DSGit) createUpdateCacheFile(cache []CommitCache, path string) error {
+	for _, comm := range cache {
+		comm.FileLocation = path
+		CachedCommitsUpdates[comm.EntityID] = comm
+	}
+	records := [][]string{
+		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl", "content"},
+	}
+	for _, c := range CachedCommitsUpdates {
+		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned), strconv.FormatBool(c.FromDL), c.Content})
+	}
+
+	csvFile, err := os.Create(CommitsUpdateCacheFile)
+	if err != nil {
+		return err
+	}
+
+	w := csv.NewWriter(csvFile)
+	err = w.WriteAll(records)
+	if err != nil {
+		return err
+	}
+	err = csvFile.Close()
+	if err != nil {
+		return err
+	}
+	file, err := os.ReadFile(CommitsUpdateCacheFile)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(CommitsUpdateCacheFile)
+	if err != nil {
+		return err
+	}
+	err = j.cacheProvider.UpdateFileByKey(j.endpoint, CommitsUpdateCacheFile, file)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func isHashCreated(hash string) bool {
 	c, ok := cachedCommits[hash]
 	if ok {
@@ -3399,6 +3529,111 @@ func isHashCreated(hash string) bool {
 
 func (j *DSGit) getCache(lastSync string) {
 	commentBytes, err := j.cacheProvider.GetFileByKey(j.endpoint, commitsCacheFile)
+	if err != nil {
+		return
+	}
+	reader := csv.NewReader(bytes.NewBuffer(commentBytes))
+	records, err := reader.ReadAll()
+	if err != nil {
+		return
+	}
+	for i, record := range records {
+		if i == 0 {
+			continue
+		}
+		orphaned, err := strconv.ParseBool(record[5])
+		if err != nil {
+			orphaned = false
+		}
+		if lastSync != "" {
+			orphaned = true
+		}
+
+		var fromDL bool
+		if len(record) > 6 {
+			fromDL, err = strconv.ParseBool(record[6])
+			if err != nil {
+				fromDL = false
+			}
+		}
+
+		var content string
+		if len(record) > 7 {
+			if record[7] != "" {
+				content = record[7]
+			}
+		}
+
+		cachedCommits[record[4]] = CommitCache{
+			Timestamp:      record[0],
+			EntityID:       record[1],
+			SourceEntityID: record[2],
+			FileLocation:   record[3],
+			Hash:           record[4],
+			Orphaned:       orphaned,
+			FromDL:         fromDL,
+			Content:        content,
+		}
+
+		createdCommits[record[1]] = true
+	}
+}
+
+func (j *DSGit) getUpdateCache(lastSync string) {
+	commentBytes, err := j.cacheProvider.GetFileByKey(j.endpoint, CommitsUpdateCacheFile)
+	if err != nil {
+		return
+	}
+	reader := csv.NewReader(bytes.NewBuffer(commentBytes))
+	records, err := reader.ReadAll()
+	if err != nil {
+		return
+	}
+	for i, record := range records {
+		if i == 0 {
+			continue
+		}
+		orphaned, err := strconv.ParseBool(record[5])
+		if err != nil {
+			orphaned = false
+		}
+		if lastSync != "" {
+			orphaned = true
+		}
+
+		var fromDL bool
+		if len(record) > 6 {
+			fromDL, err = strconv.ParseBool(record[6])
+			if err != nil {
+				fromDL = false
+			}
+		}
+
+		var content string
+		if len(record) > 7 {
+			if record[7] != "" {
+				content = record[7]
+			}
+		}
+
+		CachedCommitsUpdates[record[4]] = CommitCache{
+			Timestamp:      record[0],
+			EntityID:       record[1],
+			SourceEntityID: record[2],
+			FileLocation:   record[3],
+			Hash:           record[4],
+			Orphaned:       orphaned,
+			FromDL:         fromDL,
+			Content:        content,
+		}
+
+		createdCommits[record[1]] = true
+	}
+}
+
+func (j *DSGit) getYearCache(lastSync string) {
+	yearSTR := strconv.Itoa(CurrentCacheYear)
+	commentBytes, err := j.cacheProvider.GetFileByKey(j.endpoint, fmt.Sprintf(CommitsByYearCacheFile, yearSTR))
 	if err != nil {
 		return
 	}
@@ -3513,7 +3748,7 @@ func (j *DSGit) handleDataLakeOrphans() {
 			commit.Content = ""
 			cachedCommits[contentHash] = commit
 		}
-		if err = j.createCacheFile([]CommitCache{}, ""); err != nil {
+		if err = j.createUpdateCacheFile([]CommitCache{}, ""); err != nil {
 			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error updating commits cache: %+v", err)
 			return
 		}
@@ -3816,6 +4051,7 @@ type CommitCache struct {
 	Orphaned       bool   `json:"orphaned"`
 	FromDL         bool   `json:"from_dl"`
 	Content        string `json:"content"`
+	CommitDate     time.Time
 }
 
 // ReportData schema
