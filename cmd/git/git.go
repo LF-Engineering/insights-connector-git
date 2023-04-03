@@ -105,7 +105,7 @@ const (
 	// GitConnector ...
 	GitConnector = "git-connector"
 	PackSize     = 1000
-	HotRepoCount = 5000
+	HotRepoCount = 50000
 )
 
 var (
@@ -3159,6 +3159,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	}
 	if commitsCount >= HotRepoCount {
 		IsHotRep = true
+		CurrentCacheYear = from.Year()
 		j.getYearCache(lastSync)
 		j.getUpdateCache(lastSync)
 	} else {
