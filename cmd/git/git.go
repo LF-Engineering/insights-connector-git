@@ -3453,18 +3453,17 @@ func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.ReadFile(cacheFile)
+
+	err = j.cacheProvider.UpdateMultiPartFileByKey(j.endpoint, cacheFile)
 	if err != nil {
 		return err
 	}
+
 	err = os.Remove(cacheFile)
 	if err != nil {
 		return err
 	}
-	err = j.cacheProvider.UpdateFileByKey(j.endpoint, cacheFile, file)
-	if err != nil {
-		return err
-	}
+
 	if len(nextYearCache) > 0 {
 		CurrentCacheYear = nextYearCache[0].CommitDate.Year()
 		if err = j.createYearCacheFile(nextYearCache, path); err != nil {

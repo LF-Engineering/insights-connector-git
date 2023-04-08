@@ -3,7 +3,7 @@ module github.com/LF-Engineering/insights-datasource-git
 go 1.17
 
 require (
-	github.com/LF-Engineering/insights-datasource-shared v1.5.26
+	github.com/LF-Engineering/insights-datasource-shared v1.5.30-0.20230408041536-83d398cfb211
 	github.com/LF-Engineering/lfx-event-schema v0.1.37
 	github.com/aws/aws-lambda-go v1.27.1
 	github.com/aws/aws-sdk-go v1.42.25
