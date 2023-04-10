@@ -3453,7 +3453,7 @@ func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
 	if err != nil {
 		return err
 	}
-
+	cachedCommits = make(map[string]CommitCache)
 	err = j.cacheProvider.UpdateMultiPartFileByKey(j.endpoint, cacheFile)
 	if err != nil {
 		return err
@@ -3463,7 +3463,7 @@ func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
 	if err != nil {
 		return err
 	}
-
+	loadCacheToMemory(records)
 	if len(nextYearCache) > 0 {
 		CurrentCacheYear = nextYearCache[0].CommitDate.Year()
 		if err = j.createYearCacheFile(nextYearCache, path); err != nil {
@@ -3681,6 +3681,48 @@ func (j *DSGit) getYearCache(lastSync string) {
 		}
 
 		createdCommits[record[1]] = true
+	}
+}
+
+func loadCacheToMemory(records [][]string) {
+	lastSync := os.Getenv("LAST_SYNC")
+	for i, record := range records {
+		if i == 0 {
+			continue
+		}
+		orphaned, err := strconv.ParseBool(record[5])
+		if err != nil {
+			orphaned = false
+		}
+		if lastSync != "" {
+			orphaned = true
+		}
+
+		var fromDL bool
+		if len(record) > 6 {
+			fromDL, err = strconv.ParseBool(record[6])
+			if err != nil {
+				fromDL = false
+			}
+		}
+
+		var content string
+		if len(record) > 7 {
+			if record[7] != "" {
+				content = record[7]
+			}
+		}
+
+		cachedCommits[record[4]] = CommitCache{
+			Timestamp:      record[0],
+			EntityID:       record[1],
+			SourceEntityID: record[2],
+			FileLocation:   record[3],
+			Hash:           record[4],
+			Orphaned:       orphaned,
+			FromDL:         fromDL,
+			Content:        content,
+		}
 	}
 }
 
