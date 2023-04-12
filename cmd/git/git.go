@@ -104,7 +104,7 @@ const (
 	Success = "success"
 	// GitConnector ...
 	GitConnector   = "git-connector"
-	PackSize       = 1000
+	PackSize       = 200
 	HotRepoCount   = 50000
 	YearFirstHalf  = "first-half"
 	YearSecondHalf = "second-half"
@@ -3461,7 +3461,6 @@ func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error 
 	if err != nil {
 		return err
 	}
-	cachedCommits = make(map[string]CommitCache)
 	err = j.cacheProvider.UpdateMultiPartFileByKey(j.endpoint, cacheFile)
 	if err != nil {
 		return err
@@ -3471,9 +3470,8 @@ func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error 
 	if err != nil {
 		return err
 	}
-	loadCacheToMemory(records)
 	if len(nextYearHalfCache) > 0 {
-		CurrentCacheYear = nextYearHalfCache[0].CommitDate.Year()
+		//CurrentCacheYear = nextYearHalfCache[0].CommitDate.Year()
 		updateYearHalf(nextYearHalfCache[0].CommitDate)
 		if err = j.createYearHalfCacheFile(nextYearHalfCache, path); err != nil {
 			return err
@@ -3503,6 +3501,7 @@ func updateYearHalf(commitDate time.Time) {
 		return
 	}
 	CurrentCacheYearHalf = YearFirstHalf
+	CurrentCacheYear += 1
 }
 
 func (j *DSGit) createUpdateCacheFile(cache []CommitCache, path string) error {
