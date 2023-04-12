@@ -3496,7 +3496,7 @@ func updateYearHalf(commitDate time.Time) {
 		return
 	}
 
-	if cuHalf == YearFirstHalf {
+	if CurrentCacheYearHalf == YearFirstHalf {
 		CurrentCacheYearHalf = YearSecondHalf
 		return
 	}
