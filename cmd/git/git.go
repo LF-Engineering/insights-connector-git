@@ -104,7 +104,7 @@ const (
 	Success = "success"
 	// GitConnector ...
 	GitConnector   = "git-connector"
-	PackSize       = 200
+	PackSize       = 1000
 	HotRepoCount   = 50000
 	YearFirstHalf  = "first-half"
 	YearSecondHalf = "second-half"
