@@ -103,9 +103,11 @@ const (
 	// Success status
 	Success = "success"
 	// GitConnector ...
-	GitConnector = "git-connector"
-	PackSize     = 1000
-	HotRepoCount = 50000
+	GitConnector   = "git-connector"
+	PackSize       = 1000
+	HotRepoCount   = 50000
+	YearFirstHalf  = "first-half"
+	YearSecondHalf = "second-half"
 )
 
 var (
@@ -524,16 +526,18 @@ var (
 	// GitTrailerPPAuthors - trailer name to authors map (for pair programming)
 	GitTrailerPPAuthors = map[string]string{"Signed-off-by": "authors_signed_off", "Co-authored-by": "co_authors"}
 	// max upstream date
-	gMaxUpstreamDt         time.Time
-	gMaxUpstreamDtMtx      = &sync.Mutex{}
-	cachedCommits          = make(map[string]CommitCache)
-	commitsCacheFile       = "commits-cache.csv"
-	createdCommits         = make(map[string]bool)
-	IsHotRep               = false
-	CommitsByYearCacheFile = "commits-cache-%s.csv"
-	CommitsUpdateCacheFile = "commits-update-cache.csv"
-	CurrentCacheYear       = 1970
-	CachedCommitsUpdates   = make(map[string]CommitCache)
+	gMaxUpstreamDt             time.Time
+	gMaxUpstreamDtMtx          = &sync.Mutex{}
+	cachedCommits              = make(map[string]CommitCache)
+	commitsCacheFile           = "commits-cache.csv"
+	createdCommits             = make(map[string]bool)
+	IsHotRep                   = false
+	CommitsByYearCacheFile     = "commits-cache-%s.csv"
+	CommitsUpdateCacheFile     = "commits-update-cache.csv"
+	CurrentCacheYear           = 1970
+	CachedCommitsUpdates       = make(map[string]CommitCache)
+	CommitsByYearHalfCacheFile = "commits-cache-%s-%s.csv"
+	CurrentCacheYearHalf       = YearFirstHalf
 )
 
 // Publisher - for streaming data to Kinesis
@@ -1869,7 +1873,7 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 							return
 						}
 					} else {
-						if err = j.createYearCacheFile(commits, path); err != nil {
+						if err = j.createYearHalfCacheFile(commits, path); err != nil {
 							return
 						}
 					}
@@ -3160,7 +3164,10 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	if commitsCount >= HotRepoCount {
 		IsHotRep = true
 		CurrentCacheYear = from.Year()
-		j.getYearCache(lastSync)
+		if int(from.Month()) > 6 {
+			CurrentCacheYearHalf = YearSecondHalf
+		}
+		j.getYearHalfCache(lastSync)
 		j.getUpdateCache(lastSync)
 	} else {
 		j.getCache(lastSync)
@@ -3420,14 +3427,15 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 	return nil
 }
 
-func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
-	nextYearCache := make([]CommitCache, 0)
+func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error {
+	nextYearHalfCache := make([]CommitCache, 0)
 	for _, comm := range cache {
 		comm.FileLocation = path
-		if comm.CommitDate.Year() == CurrentCacheYear {
+		commitYearHalf := getDateYearHalf(comm.CommitDate)
+		if comm.CommitDate.Year() == CurrentCacheYear && commitYearHalf == CurrentCacheYearHalf {
 			cachedCommits[comm.EntityID] = comm
 		} else {
-			nextYearCache = append(nextYearCache, comm)
+			nextYearHalfCache = append(nextYearHalfCache, comm)
 		}
 	}
 	records := [][]string{
@@ -3438,7 +3446,7 @@ func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
 	}
 
 	yearSTR := strconv.Itoa(CurrentCacheYear)
-	cacheFile := fmt.Sprintf(CommitsByYearCacheFile, yearSTR)
+	cacheFile := fmt.Sprintf(CommitsByYearHalfCacheFile, yearSTR, CurrentCacheYearHalf)
 	csvFile, err := os.Create(cacheFile)
 	if err != nil {
 		return err
@@ -3453,7 +3461,6 @@ func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
 	if err != nil {
 		return err
 	}
-	cachedCommits = make(map[string]CommitCache)
 	err = j.cacheProvider.UpdateMultiPartFileByKey(j.endpoint, cacheFile)
 	if err != nil {
 		return err
@@ -3463,16 +3470,38 @@ func (j *DSGit) createYearCacheFile(cache []CommitCache, path string) error {
 	if err != nil {
 		return err
 	}
-	loadCacheToMemory(records)
-	if len(nextYearCache) > 0 {
-		CurrentCacheYear = nextYearCache[0].CommitDate.Year()
-		if err = j.createYearCacheFile(nextYearCache, path); err != nil {
+	if len(nextYearHalfCache) > 0 {
+		//CurrentCacheYear = nextYearHalfCache[0].CommitDate.Year()
+		updateYearHalf(nextYearHalfCache[0].CommitDate)
+		if err = j.createYearHalfCacheFile(nextYearHalfCache, path); err != nil {
 			return err
 		}
 		cachedCommits = make(map[string]CommitCache)
-		j.getYearCache(os.Getenv("LAST_SYNC"))
+		j.getYearHalfCache(os.Getenv("LAST_SYNC"))
 	}
 	return nil
+}
+
+func getDateYearHalf(commitDate time.Time) string {
+	monthNumber := int(commitDate.Month())
+	if monthNumber > 6 {
+		return YearSecondHalf
+	}
+	return YearFirstHalf
+}
+
+func updateYearHalf(commitDate time.Time) {
+	cuHalf := getDateYearHalf(commitDate)
+	if cuHalf == CurrentCacheYearHalf {
+		return
+	}
+
+	if CurrentCacheYearHalf == YearFirstHalf {
+		CurrentCacheYearHalf = YearSecondHalf
+		return
+	}
+	CurrentCacheYearHalf = YearFirstHalf
+	CurrentCacheYear += 1
 }
 
 func (j *DSGit) createUpdateCacheFile(cache []CommitCache, path string) error {
@@ -3631,9 +3660,9 @@ func (j *DSGit) getUpdateCache(lastSync string) {
 	}
 }
 
-func (j *DSGit) getYearCache(lastSync string) {
+func (j *DSGit) getYearHalfCache(lastSync string) {
 	yearSTR := strconv.Itoa(CurrentCacheYear)
-	commentBytes, err := j.cacheProvider.GetFileByKey(j.endpoint, fmt.Sprintf(CommitsByYearCacheFile, yearSTR))
+	commentBytes, err := j.cacheProvider.GetFileByKey(j.endpoint, fmt.Sprintf(CommitsByYearHalfCacheFile, yearSTR, CurrentCacheYearHalf))
 	if err != nil {
 		return
 	}
