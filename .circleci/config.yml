@@ -91,7 +91,7 @@ workflows:
             - build
           filters:
             branches:
-              only: shard-cache-per-half-year #main
+              only: main
             tags:
               ignore: /.*/
       - approve_prod:
