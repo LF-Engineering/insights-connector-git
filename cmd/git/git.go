@@ -3431,14 +3431,19 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 
 func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error {
 	nextYearHalfCache := make([]CommitCache, 0)
+	currentYearCommitsCount := 0
 	for _, comm := range cache {
 		comm.FileLocation = path
 		commitYearHalf := getDateYearHalf(comm.CommitDate)
 		if comm.CommitDate.Year() == CurrentCacheYear && commitYearHalf == CurrentCacheYearHalf {
 			cachedCommits[comm.EntityID] = comm
+			currentYearCommitsCount++
 		} else {
 			nextYearHalfCache = append(nextYearHalfCache, comm)
 		}
+	}
+	if currentYearCommitsCount == 0 {
+		return nil
 	}
 	records := [][]string{
 		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl", "content"},
@@ -3472,13 +3477,14 @@ func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error 
 	if err != nil {
 		return err
 	}
+
 	if len(nextYearHalfCache) > 0 {
 		CurrentCacheYear = nextYearHalfCache[0].CommitDate.Year()
 		CurrentCacheYearHalf = YearFirstHalf
 		if nextYearHalfCache[0].CommitDate.Month() > 6 {
 			CurrentCacheYearHalf = YearSecondHalf
 		}
-		updateYearHalf(nextYearHalfCache[0].CommitDate)
+		//updateYearHalf(nextYearHalfCache[0].CommitDate)
 		if err = j.createYearHalfCacheFile(nextYearHalfCache, path); err != nil {
 			return err
 		}
