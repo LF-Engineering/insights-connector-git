@@ -538,6 +538,7 @@ var (
 	CachedCommitsUpdates       = make(map[string]CommitCache)
 	CommitsByYearHalfCacheFile = "commits-cache-%s-%s.csv"
 	CurrentCacheYearHalf       = YearFirstHalf
+	FirstCommitAt              time.Time
 )
 
 // Publisher - for streaming data to Kinesis
@@ -3008,6 +3009,7 @@ func (j *DSGit) SyncV2(ctx *shared.Ctx) (err error) {
 	if err != nil {
 		return err
 	}
+	FirstCommitAt = firstCommit.Author.When
 	from := firstCommit.Author.When.Add(time.Second * -60)
 	if ctx.DateFrom.After(from) {
 		from = *ctx.DateFrom
@@ -3471,7 +3473,11 @@ func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error 
 		return err
 	}
 	if len(nextYearHalfCache) > 0 {
-		//CurrentCacheYear = nextYearHalfCache[0].CommitDate.Year()
+		CurrentCacheYear = nextYearHalfCache[0].CommitDate.Year()
+		CurrentCacheYearHalf = YearFirstHalf
+		if nextYearHalfCache[0].CommitDate.Month() > 6 {
+			CurrentCacheYearHalf = YearSecondHalf
+		}
 		updateYearHalf(nextYearHalfCache[0].CommitDate)
 		if err = j.createYearHalfCacheFile(nextYearHalfCache, path); err != nil {
 			return err
@@ -3713,8 +3719,17 @@ func (j *DSGit) getYearHalfCache(lastSync string) {
 	}
 }
 
-func loadCacheToMemory(records [][]string) {
-	lastSync := os.Getenv("LAST_SYNC")
+func (j *DSGit) getCacheFileByKey(key string, lastSync string) (map[string]CommitCache, error) {
+	commits := make(map[string]CommitCache)
+	commentBytes, err := j.cacheProvider.GetFileByKey(j.endpoint, key)
+	if err != nil {
+		return commits, err
+	}
+	reader := csv.NewReader(bytes.NewBuffer(commentBytes))
+	records, err := reader.ReadAll()
+	if err != nil {
+		return commits, err
+	}
 	for i, record := range records {
 		if i == 0 {
 			continue
@@ -3742,7 +3757,7 @@ func loadCacheToMemory(records [][]string) {
 			}
 		}
 
-		cachedCommits[record[4]] = CommitCache{
+		commits[record[4]] = CommitCache{
 			Timestamp:      record[0],
 			EntityID:       record[1],
 			SourceEntityID: record[2],
@@ -3753,6 +3768,7 @@ func loadCacheToMemory(records [][]string) {
 			Content:        content,
 		}
 	}
+	return commits, nil
 }
 
 func isCommitCreated(id string) bool {
@@ -3828,6 +3844,103 @@ func (j *DSGit) handleDataLakeOrphans() {
 
 }
 
+// handleHotRepoDataLakeOrphans Update hot repository commits in DL with new orphaned status
+func (j *DSGit) handleHotRepoDataLakeOrphans() {
+	year := FirstCommitAt.Year()
+	half := YearFirstHalf
+	yearSTR := strconv.Itoa(year)
+
+	cacheFileName := fmt.Sprintf(CommitsByYearHalfCacheFile, yearSTR, half)
+	for {
+		commits, err := j.getCacheFileByKey(cacheFileName, "")
+		if err != nil {
+			if year > CurrentCacheYear {
+				break
+			}
+			if year == CurrentCacheYear && CurrentCacheYearHalf == YearFirstHalf && half == YearSecondHalf {
+				break
+			}
+			continue
+		}
+
+		if half == YearSecondHalf {
+			year++
+			half = YearFirstHalf
+		}
+		if half == YearFirstHalf {
+			half = YearSecondHalf
+		}
+
+		formattedData := j.handleSingleCacheFile(commits)
+		if len(formattedData) > 0 {
+			path, err := j.Publisher.PushEvents(CommitUpdated, "insights", GitDataSource, "commits", os.Getenv("STAGE"), formattedData, j.endpoint)
+			if err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error pushing data lake orphand commits: %+v", err)
+				return
+			}
+			for _, c := range formattedData {
+				payload := c.(git.CommitUpdatedEvent).Payload
+				contentHash, er := createHash(payload)
+				if er != nil {
+					j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error hashing commit data: %+v", err)
+					continue
+				}
+				commit := cachedCommits[contentHash]
+				commit.FromDL = false
+				commit.FileLocation = path
+				commit.Content = ""
+				cachedCommits[contentHash] = commit
+			}
+			if err = j.createUpdateCacheFile([]CommitCache{}, ""); err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error updating commits cache: %+v", err)
+				return
+			}
+			j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Infof("updated %d orphand commits from data lake", len(formattedData))
+		}
+	}
+
+}
+
+func (j *DSGit) handleSingleCacheFile(commits map[string]CommitCache) []interface{} {
+	formattedData := make([]interface{}, 0)
+	baseEvent := service.BaseEvent{
+		Type: CommitUpdated,
+		CRUDInfo: service.CRUDInfo{
+			CreatedBy: GitConnector,
+			UpdatedBy: GitConnector,
+			CreatedAt: time.Now().Unix(),
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	commitBaseEvent := git.CommitBaseEvent{
+		Connector:        insights.GitConnector,
+		ConnectorVersion: GitBackendVersion,
+		Source:           insights.Source(j.RepositorySource),
+	}
+	for _, v := range commits {
+		if v.Orphaned {
+			commitB, err := b64.StdEncoding.DecodeString(v.Content)
+			if err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error decode datalake orphand commit: %+v", err)
+			}
+			var commit git.Commit
+			err = jsoniter.Unmarshal(commitB, &commit)
+			if err != nil {
+				j.log.WithFields(logrus.Fields{"operation": "handleDataLakeOrphans"}).Errorf("error unmarshall datalake orphand commit: %+v", err)
+				continue
+			}
+			commit.Orphaned = true
+			commitEvent := git.CommitUpdatedEvent{
+				CommitBaseEvent: commitBaseEvent,
+				BaseEvent:       baseEvent,
+				Payload:         commit,
+			}
+			formattedData = append(formattedData, commitEvent)
+		}
+	}
+	return formattedData
+}
+
 func createHash(content git.Commit) (string, error) {
 	commitHashFields := CommitHashFields{
 		ID:            content.ID,
@@ -3860,10 +3973,11 @@ func (j *DSGit) setLastSync(ctx *shared.Ctx) error {
 	defer gMaxUpstreamDtMtx.Unlock()
 
 	lastSyncData := lastSyncFile{
-		LastSync: gMaxUpstreamDt,
-		Target:   commitsCount,
-		Total:    len(createdCommits),
-		Head:     commitID,
+		LastSync:      gMaxUpstreamDt,
+		Target:        commitsCount,
+		Total:         len(createdCommits),
+		Head:          commitID,
+		FirstCommitAt: FirstCommitAt,
 	}
 
 	lastSyncDataB, err := jsoniter.Marshal(lastSyncData)
@@ -4145,10 +4259,11 @@ type clocResult struct {
 }
 
 type lastSyncFile struct {
-	LastSync time.Time `json:"last_sync"`
-	Target   int       `json:"target,omitempty"`
-	Total    int       `json:"total,omitempty"`
-	Head     string    `json:"head,omitempty"`
+	LastSync      time.Time `json:"last_sync"`
+	Target        int       `json:"target,omitempty"`
+	Total         int       `json:"total,omitempty"`
+	Head          string    `json:"head,omitempty"`
+	FirstCommitAt time.Time `json:"first_commit_At"`
 }
 
 // CommitHashFields elected fields from commit schema to hash
