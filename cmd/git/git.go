@@ -3429,7 +3429,7 @@ func (j *DSGit) createCacheFile(cache []CommitCache, path string) error {
 	return nil
 }
 
-func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error {
+func (j *DSGit) createYearHalfCacheFileOld(cache []CommitCache, path string) error {
 	nextYearHalfCache := make([]CommitCache, 0)
 	currentYearCommitsCount := 0
 	for _, comm := range cache {
@@ -3491,6 +3491,80 @@ func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error 
 		cachedCommits = make(map[string]CommitCache)
 		j.getYearHalfCache(os.Getenv("LAST_SYNC"))
 	}
+	return nil
+}
+
+func (j *DSGit) createYearHalfCacheFile(cache []CommitCache, path string) error {
+	nextYearHalfCache := make([]CommitCache, 0)
+	for _, comm := range cache {
+		comm.FileLocation = path
+		commitYearHalf := getDateYearHalf(comm.CommitDate)
+		if comm.CommitDate.Year() == CurrentCacheYear && commitYearHalf == CurrentCacheYearHalf {
+			cachedCommits[comm.EntityID] = comm
+		} else {
+			nextYearHalfCache = append(nextYearHalfCache, comm)
+		}
+	}
+
+	if err := j.syncRemoteCurrentYearCache(); err != nil {
+		return err
+	}
+
+	if len(nextYearHalfCache) > 0 {
+		CurrentCacheYear = nextYearHalfCache[0].CommitDate.Year()
+		CurrentCacheYearHalf = YearFirstHalf
+		if nextYearHalfCache[0].CommitDate.Month() > 6 {
+			CurrentCacheYearHalf = YearSecondHalf
+		}
+
+		j.getYearHalfCache(os.Getenv("LAST_SYNC"))
+		for _, comm := range nextYearHalfCache {
+			comm.FileLocation = path
+			cachedCommits[comm.EntityID] = comm
+		}
+
+		if err := j.syncRemoteCurrentYearCache(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (j *DSGit) syncRemoteCurrentYearCache() error {
+	records := [][]string{
+		{"timestamp", "entity_id", "source_entity_id", "file_location", "hash", "orphaned", "from_dl", "content"},
+	}
+	for _, c := range cachedCommits {
+		records = append(records, []string{c.Timestamp, c.EntityID, c.SourceEntityID, c.FileLocation, c.Hash, strconv.FormatBool(c.Orphaned), strconv.FormatBool(c.FromDL), c.Content})
+	}
+
+	yearSTR := strconv.Itoa(CurrentCacheYear)
+	cacheFile := fmt.Sprintf(CommitsByYearHalfCacheFile, yearSTR, CurrentCacheYearHalf)
+	csvFile, err := os.Create(cacheFile)
+	if err != nil {
+		return err
+	}
+
+	w := csv.NewWriter(csvFile)
+	err = w.WriteAll(records)
+	if err != nil {
+		return err
+	}
+	err = csvFile.Close()
+	if err != nil {
+		return err
+	}
+	err = j.cacheProvider.UpdateMultiPartFileByKey(j.endpoint, cacheFile)
+	if err != nil {
+		return err
+	}
+
+	err = os.Remove(cacheFile)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
