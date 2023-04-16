@@ -1831,14 +1831,18 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 					if !hashExist && !isCreated {
 						formattedData = append(formattedData, d)
 						tStamp := d.Payload.SyncTimestamp.Unix()
-						commits = append(commits, CommitCache{
+						comm := CommitCache{
 							Timestamp:      fmt.Sprintf("%v", tStamp),
 							EntityID:       d.Payload.ID,
 							SourceEntityID: d.Payload.SHA,
 							Content:        commitStr,
 							Hash:           contentHash,
 							CommitDate:     d.Payload.CommittedTimestamp,
-						})
+						}
+						if IsHotRep {
+							comm.Content = ""
+						}
+						commits = append(commits, comm)
 						createdCommits[d.Payload.ID] = true
 					}
 					if isCreated && !hashExist {
@@ -1852,14 +1856,18 @@ func (j *DSGit) GitEnrichItems(ctx *shared.Ctx, thrN int, items []interface{}, d
 						}
 						updatedData = append(updatedData, updatedEvent)
 						tStamp := d.Payload.SyncTimestamp.Unix()
-						updateCommits = append(updateCommits, CommitCache{
+						comm := CommitCache{
 							Timestamp:      fmt.Sprintf("%v", tStamp),
 							EntityID:       d.Payload.ID,
 							SourceEntityID: d.Payload.SHA,
 							Content:        commitStr,
 							Hash:           contentHash,
 							CommitDate:     d.Payload.CommittedTimestamp,
-						})
+						}
+						if IsHotRep {
+							comm.Content = ""
+						}
+						updateCommits = append(updateCommits, comm)
 					}
 
 				}
